@@ -36,29 +36,66 @@ type StatOpt = { id: string; label: string; icon: string; desc: string; apply: (
 
 let _did = 0, _bid = 0, _pid = 0;
 
-// ─── Star Field (client-only) ────────────────────────────────────────────────
+// ─── Battle Arena Background ────────────────────────────────────────────────
 function StarField() {
   const [stars, setStars] = useState<{ id: number; x: number; y: number; size: number; dur: number; delay: number }[]>([]);
+  const [wisps, setWisps] = useState<{ id: number; x: number; size: number; dur: number; delay: number }[]>([]);
   useEffect(() => {
-    setStars(Array.from({ length: 28 }, (_, i) => ({
-      id: i, x: Math.random() * 100, y: Math.random() * 100,
-      size: 1 + Math.random() * 1.6, dur: 5 + Math.random() * 8, delay: Math.random() * 5,
+    setStars(Array.from({ length: 35 }, (_, i) => ({
+      id: i, x: Math.random() * 100, y: Math.random() * 70,
+      size: 1 + Math.random() * 2, dur: 4 + Math.random() * 7, delay: Math.random() * 6,
+    })));
+    setWisps(Array.from({ length: 6 }, (_, i) => ({
+      id: i, x: 10 + Math.random() * 80, size: 40 + Math.random() * 60,
+      dur: 6 + Math.random() * 8, delay: Math.random() * 5,
     })));
   }, []);
   return (
     <div className="absolute inset-0 overflow-hidden pointer-events-none">
+      {/* Deep starfield */}
       {stars.map(s => (
         <motion.div key={s.id} className="absolute rounded-full bg-white"
           style={{ left: `${s.x}%`, top: `${s.y}%`, width: s.size, height: s.size }}
-          animate={{ opacity: [0.1, 0.55, 0.1], scale: [1, 1.3, 1] }}
+          animate={{ opacity: [0.08, 0.5, 0.08], scale: [1, 1.4, 1] }}
           transition={{ duration: s.dur, delay: s.delay, repeat: Infinity, ease: "easeInOut" }} />
       ))}
-      {/* ambient energy glow */}
+      {/* Hex grid overlay */}
+      <div className="absolute inset-0" style={{
+        backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='48'%3E%3Cpath d='M28 4 L52 18 L52 30 L28 44 L4 30 L4 18 Z' fill='none' stroke='rgba(155,48,255,0.06)' stroke-width='0.8'/%3E%3C/svg%3E")`,
+        backgroundSize: "56px 48px",
+      }} />
+      {/* Ground terrain glow */}
+      <div className="absolute bottom-0 left-0 right-0" style={{
+        height: "38%",
+        background: "linear-gradient(to top,rgba(100,20,180,0.18) 0%,rgba(60,10,120,0.08) 50%,transparent 100%)",
+      }} />
+      {/* Left/right side ambience */}
+      <div className="absolute top-0 left-0 bottom-0" style={{ width: "25%",
+        background: "linear-gradient(to right,rgba(0,150,255,0.04),transparent)" }} />
+      <div className="absolute top-0 right-0 bottom-0" style={{ width: "25%",
+        background: "linear-gradient(to left,rgba(255,50,150,0.04),transparent)" }} />
+      {/* Ground line */}
+      <div className="absolute left-4 right-4" style={{
+        bottom: "18%", height: 1,
+        background: "linear-gradient(90deg,transparent,rgba(155,48,255,0.22),rgba(100,200,255,0.18),rgba(155,48,255,0.22),transparent)",
+      }} />
+      {/* Fog wisps near ground */}
+      {wisps.map(w => (
+        <motion.div key={w.id} className="absolute rounded-full"
+          style={{
+            bottom: "14%", left: `${w.x}%`, width: w.size, height: w.size * 0.4,
+            background: "radial-gradient(ellipse,rgba(155,48,255,0.07) 0%,transparent 70%)",
+            transform: "translateX(-50%)",
+          }}
+          animate={{ opacity: [0, 0.8, 0], scale: [0.8, 1.2, 0.8], x: [-10, 10, -10] }}
+          transition={{ duration: w.dur, delay: w.delay, repeat: Infinity, ease: "easeInOut" }} />
+      ))}
+      {/* Central arena glow */}
       <motion.div className="absolute rounded-full pointer-events-none"
-        style={{ width: 280, height: 280, left: "50%", top: "60%", marginLeft: -140, marginTop: -140,
-          background: "radial-gradient(circle,rgba(155,48,255,0.07) 0%,transparent 70%)" }}
-        animate={{ scale: [1, 1.12, 1], opacity: [0.5, 1, 0.5] }}
-        transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }} />
+        style={{ width: 320, height: 200, left: "50%", top: "55%", marginLeft: -160, marginTop: -100,
+          background: "radial-gradient(ellipse,rgba(155,48,255,0.06) 0%,transparent 70%)" }}
+        animate={{ scale: [1, 1.15, 1], opacity: [0.5, 1, 0.5] }}
+        transition={{ duration: 5, repeat: Infinity, ease: "easeInOut" }} />
     </div>
   );
 }
@@ -151,49 +188,122 @@ function useSounds() {
 
 // ─── Monster Unit ────────────────────────────────────────────────────────────
 function MonsterUnit({ m }: { m: Mon }) {
-  const sz = m.size === "boss" ? "text-5xl" : m.size === "md" ? "text-3xl" : "text-2xl";
+  const isBoss = m.isBoss;
+  const circleW = isBoss ? 76 : m.size === "md" ? 56 : 46;
+  const emojiSz = isBoss ? "text-5xl" : m.size === "md" ? "text-3xl" : "text-2xl";
   const hpPct = (m.hp / m.maxHp) * 100;
-  const col = m.phase2 ? "#ff2200" : ELEMENT_CONFIG[m.element].color;
+  const col = m.phase2 ? "#ff3300" : ELEMENT_CONFIG[m.element].color;
+  const barW = isBoss ? 88 : circleW;
   return (
     <motion.div className="absolute flex flex-col items-center pointer-events-none select-none"
       style={{ left: `${m.posX}%`, top: m.displayY, transform: "translateX(-50%)" }}
-      animate={m.hitFlash ? { x: [-4, 4, -4, 0] } : {}}
-      transition={{ duration: 0.12, ease: "easeOut" }}>
-      {/* HP bar */}
-      <div className="w-12 h-1.5 bg-[rgba(0,0,0,0.5)] rounded-full mb-0.5 overflow-hidden border border-[rgba(255,255,255,0.08)]">
-        <motion.div className="h-full rounded-full"
-          style={{ background: hpPct > 55 ? "#39ff14" : hpPct > 28 ? "#ffaa00" : "#ff3333" }}
-          animate={{ width: `${hpPct}%` }} transition={{ duration: 0.12 }} />
-      </div>
-      {m.isBoss && (
-        <div className="text-[8px] font-bold mb-0.5" style={{ color: col }}>
-          {m.hp.toLocaleString()}
-        </div>
-      )}
-      {/* Emoji with glow + idle float + hit flash */}
-      <motion.div className={`${sz}`}
-        animate={m.hitFlash
-          ? { filter: ["brightness(1)", "brightness(3)", "brightness(1)"], scale: [1, 1.1, 1] }
-          : { y: [0, m.isBoss ? -5 : -3, 0] }
-        }
-        transition={m.hitFlash
-          ? { duration: 0.18, ease: "easeOut" }
-          : { duration: m.isBoss ? 1.8 : 2.4, repeat: Infinity, ease: "easeInOut", delay: Math.random() * 1.5 }
-        }
-        style={{
-          filter: m.isBoss
-            ? `drop-shadow(0 0 14px ${col}) drop-shadow(0 0 28px ${col}88)`
-            : `drop-shadow(0 0 5px ${col}80)`,
-          transform: m.phase2 ? "scale(1.15)" : undefined,
-        }}>
-        {m.emoji}
-      </motion.div>
-      {m.isBoss && (
-        <motion.div className="text-[9px] font-bold mt-0.5" style={{ color: col }}
-          animate={{ opacity: [0.8, 1, 0.8] }} transition={{ duration: 1.2, repeat: Infinity }}>
+      animate={m.hitFlash ? { x: [-5, 5, -4, 3, 0] } : {}}
+      transition={{ duration: 0.14, ease: "easeOut" }}>
+
+      {/* Boss name badge */}
+      {isBoss && (
+        <motion.div className="text-[9px] font-black mb-1 px-2 py-px rounded-full"
+          style={{
+            color: col, background: `${col}18`,
+            border: `1px solid ${col}50`,
+            textShadow: `0 0 8px ${col}`,
+            boxShadow: `0 0 8px ${col}30`,
+          }}
+          animate={{ opacity: [0.85, 1, 0.85] }} transition={{ duration: 1.1, repeat: Infinity }}>
           {m.phase2 ? "💀 " : ""}{m.name}
         </motion.div>
       )}
+
+      {/* HP bar */}
+      <div className="mb-1.5 relative" style={{ width: barW }}>
+        <div className="h-2 rounded-full overflow-hidden"
+          style={{
+            background: "rgba(0,0,0,0.65)",
+            border: `1px solid ${col}30`,
+            boxShadow: `inset 0 1px 2px rgba(0,0,0,0.8)`,
+          }}>
+          <motion.div className="h-full rounded-full"
+            style={{
+              background: hpPct > 55
+                ? `linear-gradient(90deg,#22dd44,#39ff14)`
+                : hpPct > 28
+                  ? `linear-gradient(90deg,#ff8800,#ffcc00)`
+                  : `linear-gradient(90deg,#cc0022,#ff3333)`,
+              boxShadow: hpPct > 55 ? "0 0 4px #39ff1460" : hpPct > 28 ? "0 0 4px #ff880060" : "0 0 4px #ff333360",
+            }}
+            animate={{ width: `${hpPct}%` }} transition={{ duration: 0.14 }} />
+          {/* HP segment markers */}
+          {[25, 50, 75].map(p => (
+            <div key={p} className="absolute top-0 bottom-0 w-px"
+              style={{ left: `${p}%`, background: "rgba(255,255,255,0.12)" }} />
+          ))}
+        </div>
+        {isBoss && (
+          <div className="text-center text-[7px] font-bold mt-0.5" style={{ color: col }}>
+            {m.hp.toLocaleString()} / {m.maxHp.toLocaleString()}
+          </div>
+        )}
+      </div>
+
+      {/* Main unit puck */}
+      <motion.div className="relative flex items-center justify-center rounded-full"
+        style={{
+          width: circleW, height: circleW,
+          background: `radial-gradient(circle at 38% 28%, ${col}20, rgba(5,2,18,0.96))`,
+          border: `2.5px solid ${col}${m.phase2 ? "dd" : "70"}`,
+          boxShadow: [
+            `0 0 ${isBoss ? 28 : 14}px ${col}${m.phase2 ? "aa" : "50"}`,
+            `0 0 ${isBoss ? 50 : 24}px ${col}${m.phase2 ? "44" : "18"}`,
+            `inset 0 1px 0 rgba(255,255,255,0.12)`,
+            `0 4px 16px rgba(0,0,0,0.8)`,
+          ].join(","),
+        }}
+        animate={m.hitFlash
+          ? { filter: ["brightness(1)", "brightness(3.5) saturate(2)", "brightness(1)"], scale: [1, 1.14, 1] }
+          : { y: [0, isBoss ? -6 : -3, 0] }
+        }
+        transition={m.hitFlash
+          ? { duration: 0.18 }
+          : { duration: isBoss ? 1.8 : 2.3, repeat: Infinity, ease: "easeInOut" }
+        }>
+        {/* Inner radial highlight */}
+        <div className="absolute inset-0 rounded-full"
+          style={{ background: `radial-gradient(circle at 35% 25%, ${col}18 0%, transparent 65%)` }} />
+        {/* Bottom shadow */}
+        <div className="absolute bottom-0 left-2 right-2 h-2 rounded-full"
+          style={{ background: `radial-gradient(ellipse, ${col}30, transparent)`, filter: "blur(3px)" }} />
+
+        <span className={emojiSz} style={{
+          position: "relative", zIndex: 1,
+          filter: `drop-shadow(0 0 ${isBoss ? 12 : 6}px ${col}${isBoss ? "cc" : "99"})`
+        }}>
+          {m.emoji}
+        </span>
+
+        {/* Phase 2 ring */}
+        {m.phase2 && (
+          <motion.div className="absolute -inset-1.5 rounded-full"
+            style={{ border: "2px solid #ff3300", boxShadow: "0 0 14px #ff330066, inset 0 0 10px #ff330022" }}
+            animate={{ opacity: [0.5, 1, 0.5], scale: [1, 1.04, 1] }}
+            transition={{ duration: 0.35, repeat: Infinity }} />
+        )}
+      </motion.div>
+
+      {/* Element + level badge */}
+      <div className="flex items-center gap-1 mt-1">
+        <div className="text-[9px] rounded-full px-1.5 py-px font-bold"
+          style={{
+            background: `${col}20`,
+            border: `1px solid ${col}40`,
+            color: col,
+            fontSize: 9,
+          }}>
+          {ELEMENT_CONFIG[m.element].emoji}
+        </div>
+        {!isBoss && (
+          <div className="text-[7px] text-[#6b7a99] truncate max-w-[44px]">{m.name}</div>
+        )}
+      </div>
     </motion.div>
   );
 }
@@ -202,18 +312,36 @@ function MonsterUnit({ m }: { m: Mon }) {
 function FloatDmgs({ items }: { items: FloatDmg[] }) {
   return <>
     {items.map(d => (
-      <motion.div key={d.id} className="absolute pointer-events-none font-black z-30 select-none"
-        style={{
-          left: d.x + d.dx, top: d.y,
-          fontSize: d.clash ? 17 : d.crit ? 20 : 13,
-          color: d.clash ? "#ff8800" : d.crit ? "#ffd700" : "#ff4455",
-          textShadow: d.clash ? "0 0 12px #ff4400,0 0 24px #ff4400" : d.crit ? "0 0 10px #ffd700,0 0 20px #ffd700" : "0 0 6px #ff0033",
+      <motion.div key={d.id} className="absolute pointer-events-none z-30 select-none flex flex-col items-center"
+        style={{ left: d.x + d.dx - 20, top: d.y, width: 40 }}
+        initial={{ opacity: 1, y: 0, scale: d.crit ? 0.4 : 0.7 }}
+        animate={{ opacity: 0, y: d.crit ? -80 : -55, scale: d.crit || d.clash ? 1.4 : 1.0 }}
+        transition={{ duration: d.crit ? 1.3 : d.clash ? 1.2 : 0.85, ease: "easeOut" }}>
+        {/* Starburst ring for crits */}
+        {d.crit && (
+          <motion.div className="absolute inset-0 rounded-full"
+            style={{ background: "radial-gradient(circle,rgba(255,215,0,0.35),transparent 70%)", width: 50, height: 50, left: -5, top: -5 }}
+            initial={{ scale: 0.2, opacity: 1 }} animate={{ scale: 2.5, opacity: 0 }}
+            transition={{ duration: 0.5, ease: "easeOut" }} />
+        )}
+        <span style={{
+          fontFamily: "'Cinzel', serif",
+          fontWeight: 900,
+          fontSize: d.clash ? 18 : d.crit ? 22 : 13,
+          color: d.clash ? "#ff9900" : d.crit ? "#ffe566" : "#ff5566",
+          textShadow: d.clash
+            ? "0 0 8px #ff6600,0 0 20px #ff4400,0 2px 4px rgba(0,0,0,0.9)"
+            : d.crit
+              ? "0 0 10px #ffd700,0 0 24px #ffaa00,0 0 40px #ff880080,0 2px 4px rgba(0,0,0,0.9)"
+              : "0 0 6px #ff2233,0 1px 3px rgba(0,0,0,0.9)",
           lineHeight: 1,
-        }}
-        initial={{ opacity: 1, y: 0, scale: 0.5 }}
-        animate={{ opacity: 0, y: -60, scale: d.crit || d.clash ? 1.3 : 1.0 }}
-        transition={{ duration: d.crit || d.clash ? 1.2 : 0.9, ease: "easeOut" }}>
-        {d.clash ? `⚡${d.v}` : d.crit ? `💥${d.v}` : `-${d.v}`}
+          letterSpacing: d.crit ? "-0.5px" : 0,
+        }}>
+          {d.clash ? `⚡${d.v}` : d.crit ? `CRIT! ${d.v}` : `-${d.v}`}
+        </span>
+        {d.crit && (
+          <span style={{ fontSize: 9, color: "#ffd70099", fontWeight: 700, marginTop: -2 }}>CRITICAL</span>
+        )}
       </motion.div>
     ))}
   </>;
@@ -222,12 +350,20 @@ function FloatDmgs({ items }: { items: FloatDmg[] }) {
 // ─── Particle burst ──────────────────────────────────────────────────────────
 function ParticleBurst({ items }: { items: Particle[] }) {
   return <>
-    {items.map(p => (
-      <motion.div key={p.id} className="absolute rounded-full pointer-events-none z-25"
-        style={{ left: p.x, top: p.y, width: 5, height: 5, background: p.color, boxShadow: `0 0 4px ${p.color}` }}
-        animate={{ x: p.dx * 40, y: p.dy * 40, opacity: 0, scale: 0 }}
-        transition={{ duration: 0.55, ease: "easeOut" }} />
-    ))}
+    {items.map(p => {
+      const big = p.id % 3 === 0;
+      return (
+        <motion.div key={p.id} className="absolute rounded-full pointer-events-none z-25"
+          style={{
+            left: p.x, top: p.y,
+            width: big ? 8 : 5, height: big ? 8 : 5,
+            background: p.color,
+            boxShadow: `0 0 ${big ? 8 : 4}px ${p.color}, 0 0 ${big ? 16 : 8}px ${p.color}60`,
+          }}
+          animate={{ x: p.dx * (big ? 60 : 45), y: p.dy * (big ? 60 : 45), opacity: 0, scale: 0 }}
+          transition={{ duration: big ? 0.7 : 0.5, ease: "easeOut" }} />
+      );
+    })}
   </>;
 }
 
@@ -756,7 +892,11 @@ function BattleContent() {
 
       {/* ── BATTLE FIELD ── */}
       <motion.div ref={fieldRef} className="relative mx-2 rounded-2xl overflow-hidden flex-1 min-h-0"
-        style={{ background: "linear-gradient(180deg,#010710 0%,#060218 50%,#0c0420 100%)", border: "1px solid rgba(255,215,0,0.1)" }}>
+        style={{
+          background: "linear-gradient(180deg,#010812 0%,#050120 35%,#080226 65%,#100330 100%)",
+          border: "1px solid rgba(155,48,255,0.22)",
+          boxShadow: "0 0 0 1px rgba(100,180,255,0.06), inset 0 1px 0 rgba(255,255,255,0.04), 0 4px 32px rgba(0,0,0,0.8)",
+        }}>
 
         <StarField />
 
@@ -795,29 +935,76 @@ function BattleContent() {
         {/* Particles */}
         <ParticleBurst items={particles} />
 
-        {/* Heroes row at bottom of field */}
-        <div className="absolute left-0 right-0 flex justify-center gap-2 px-3 pointer-events-none"
-          style={{ bottom: 10 }}>
+        {/* Heroes row at bottom of field — TFT puck style */}
+        <div className="absolute left-0 right-0 flex justify-center gap-3 px-3 pointer-events-none"
+          style={{ bottom: 8 }}>
           {heroes.map((h, i) => {
             const hp = (h.hp / h.maxHp) * 100;
             const dead = h.hp <= 0;
             const col = ELEMENT_CONFIG[h.element].color;
+            const clsCfg = CLASS_CONFIG[h.heroClass];
             return (
-              <motion.div key={h.id} className="flex flex-col items-center gap-0.5"
-                animate={!dead ? { y: [0, -5, 0] } : { opacity: 0.2 }}
-                transition={!dead ? { duration: 2 + i * 0.3, repeat: Infinity, delay: i * 0.35, ease: "easeInOut" } : {}}>
-                <div className="w-11 h-11 rounded-xl flex items-center justify-center text-2xl"
-                  style={{
-                    background: dead ? "rgba(10,10,10,0.8)" : `radial-gradient(circle at 50% 30%,${col}35,rgba(6,2,16,0.95))`,
-                    border: `2px solid ${dead ? "rgba(255,255,255,0.04)" : col + "60"}`,
-                    boxShadow: dead ? "none" : `0 0 12px ${col}50, inset 0 1px 0 rgba(255,255,255,0.08)`,
-                    filter: dead ? "grayscale(1)" : undefined,
-                  }}>
-                  {h.emoji}
+              <motion.div key={h.id} className="flex flex-col items-center gap-1"
+                animate={!dead ? { y: [0, -4, 0] } : { opacity: 0.18, filter: "grayscale(1)" }}
+                transition={!dead ? { duration: 2.2 + i * 0.28, repeat: Infinity, delay: i * 0.4, ease: "easeInOut" } : {}}>
+                {/* Puck outer ring + glow */}
+                <div className="relative" style={{ width: 52, height: 52 }}>
+                  {/* Outer aura ring */}
+                  {!dead && (
+                    <motion.div className="absolute -inset-1 rounded-full"
+                      style={{ background: `conic-gradient(from 0deg, ${col}60, transparent, ${col}40, transparent, ${col}60)` }}
+                      animate={{ rotate: [0, 360] }}
+                      transition={{ duration: 4 + i, repeat: Infinity, ease: "linear" }} />
+                  )}
+                  {/* Main circle */}
+                  <div className="absolute inset-0 rounded-full flex items-center justify-center text-2xl"
+                    style={{
+                      background: dead ? "rgba(8,4,16,0.95)" : `radial-gradient(circle at 40% 30%, ${col}30, rgba(6,2,18,0.96))`,
+                      border: `2px solid ${dead ? "rgba(255,255,255,0.06)" : col + "70"}`,
+                      boxShadow: dead ? "none" : [
+                        `0 0 16px ${col}55`,
+                        `0 0 32px ${col}22`,
+                        `inset 0 1px 0 rgba(255,255,255,0.12)`,
+                        `0 4px 12px rgba(0,0,0,0.8)`,
+                      ].join(","),
+                    }}>
+                    <span style={{ filter: dead ? "none" : `drop-shadow(0 0 6px ${col}cc)` }}>{h.emoji}</span>
+                  </div>
+                  {/* Class badge (bottom-right corner) */}
+                  <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full flex items-center justify-center text-[8px]"
+                    style={{
+                      background: `${clsCfg.color}22`,
+                      border: `1px solid ${clsCfg.color}60`,
+                      boxShadow: `0 0 4px ${clsCfg.color}50`,
+                    }}>
+                    {clsCfg.emoji}
+                  </div>
+                  {/* Element badge (top-left) */}
+                  <div className="absolute -top-0.5 -left-0.5 w-4 h-4 rounded-full flex items-center justify-center text-[7px]"
+                    style={{
+                      background: `${col}22`,
+                      border: `1px solid ${col}50`,
+                    }}>
+                    {ELEMENT_CONFIG[h.element].emoji}
+                  </div>
                 </div>
-                <div className="w-11 h-1 bg-[rgba(255,255,255,0.06)] rounded-full overflow-hidden">
+                {/* HP bar under puck */}
+                <div className="relative overflow-hidden rounded-full"
+                  style={{
+                    width: 52, height: 5,
+                    background: "rgba(0,0,0,0.6)",
+                    border: `1px solid ${dead ? "rgba(255,255,255,0.04)" : col + "30"}`,
+                  }}>
                   <div className="h-full rounded-full transition-all duration-200"
-                    style={{ width: `${hp}%`, background: hp > 55 ? "#39ff14" : hp > 28 ? "#ffaa00" : "#ff3333" }} />
+                    style={{
+                      width: `${hp}%`,
+                      background: hp > 55
+                        ? `linear-gradient(90deg,#22cc44,#39ff14)`
+                        : hp > 28
+                          ? `linear-gradient(90deg,#ff8800,#ffcc00)`
+                          : `linear-gradient(90deg,#cc0022,#ff3333)`,
+                      boxShadow: hp > 55 ? "0 0 4px #39ff1460" : "none",
+                    }} />
                 </div>
               </motion.div>
             );
