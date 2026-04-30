@@ -1,538 +1,931 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, Suspense } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useState, useEffect, useRef, useCallback, useMemo, Suspense } from "react";
+import { motion, AnimatePresence, useSpring, useTransform } from "framer-motion";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGame } from "@/contexts/game-context";
-import { GAME_CONFIG, HEROES_DATA, MONSTER_TEMPLATES, ELEMENT_CONFIG, CLASS_CONFIG } from "@/lib/constants";
-import type { Difficulty, GameSpeed, Hero, Monster, Skill } from "@/types";
+import { GAME_CONFIG, MONSTER_TEMPLATES, ELEMENT_CONFIG, CLASS_CONFIG } from "@/lib/constants";
+import type { Difficulty, GameSpeed, Hero, Monster, Skill, ElementType } from "@/types";
 
-// Generate monster instance
-let monsterIdCounter = 0;
-function spawnMonster(templateKey: keyof typeof MONSTER_TEMPLATES, isBoss = false, spawnAt = 0): Monster {
-  const t = MONSTER_TEMPLATES[templateKey];
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+let _mid = 0;
+function createMonster(key: keyof typeof MONSTER_TEMPLATES, isBoss = false, d = 1) {
+  const t = MONSTER_TEMPLATES[key];
   return {
-    id: templateKey,
-    instanceId: `m_${++monsterIdCounter}`,
-    name: t.name,
-    element: t.element,
-    hp: t.hp,
-    maxHp: t.hp,
-    atk: t.atk,
-    speed: isBoss ? 0.3 : 0.8,
-    isBoss,
-    isElite: t.isElite,
-    spawnAt,
+    id: key, instanceId: `m${++_mid}`, name: t.name, element: t.element,
+    hp: Math.floor(t.hp * d), maxHp: Math.floor(t.hp * d),
+    atk: Math.floor(t.atk * d),
+    speed: isBoss ? 0.20 : t.isElite ? 0.42 : 0.58,
+    isBoss, isElite: t.isElite, spawnAt: 0,
     reward: { exp: isBoss ? 500 : t.isElite ? 80 : 30, gold: isBoss ? 200 : t.isElite ? 30 : 10 },
-    emoji: t.emoji,
-    size: t.size,
-    posX: 10 + Math.random() * 80,
-    posY: 0,
-    alive: true,
-    phase: isBoss ? 1 : undefined,
+    emoji: t.emoji, size: t.size, posX: 10 + Math.random() * 80,
+    posY: 0, alive: true, displayY: -100, phase2: false, hitFlash: false,
   };
 }
+function elementMult(a: ElementType, b: ElementType) {
+  return ELEMENT_CONFIG[a].strongAgainst.includes(b) ? 1.5
+    : ELEMENT_CONFIG[a].weakAgainst.includes(b) ? 0.75 : 1;
+}
 
-// Monster visual
-function MonsterUnit({ monster, onKill }: { monster: Monster & { displayY: number }; onKill: () => void }) {
-  const sizeClass = monster.size === 'boss' ? 'text-5xl' : monster.size === 'md' ? 'text-3xl' : 'text-2xl';
-  const hpPct = (monster.hp / monster.maxHp) * 100;
+// ─── Types ────────────────────────────────────────────────────────────────────
+type Mon = Monster & { instanceId: string; displayY: number; phase2: boolean; hitFlash: boolean };
+type FloatDmg = { id: number; x: number; y: number; dx: number; v: number; crit: boolean; clash: boolean };
+type Beam = { id: number; x1: number; y1: number; x2: number; y2: number; color: string; born: number };
+type Particle = { id: number; x: number; y: number; dx: number; dy: number; color: string };
+type StatOpt = { id: string; label: string; icon: string; desc: string; apply: (h: Hero[]) => Hero[] };
 
+let _did = 0, _bid = 0, _pid = 0;
+
+// ─── Star Field (client-only) ────────────────────────────────────────────────
+function StarField() {
+  const [stars, setStars] = useState<{ id: number; x: number; y: number; size: number; dur: number; delay: number }[]>([]);
+  useEffect(() => {
+    setStars(Array.from({ length: 28 }, (_, i) => ({
+      id: i, x: Math.random() * 100, y: Math.random() * 100,
+      size: 1 + Math.random() * 1.6, dur: 5 + Math.random() * 8, delay: Math.random() * 5,
+    })));
+  }, []);
   return (
-    <motion.div
-      className="absolute flex flex-col items-center"
-      style={{ left: `${monster.posX}%`, top: `${monster.displayY}px`, transform: 'translateX(-50%)' }}
-      initial={{ opacity: 0, scale: 0.3 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0, y: -20 }}
-      transition={{ duration: 0.3 }}
-    >
-      {/* HP bar above */}
-      <div className="w-12 h-1 bg-[rgba(255,255,255,0.1)] rounded-full mb-0.5 overflow-hidden">
-        <div
-          className="h-full rounded-full transition-all duration-200"
-          style={{
-            width: `${hpPct}%`,
-            background: hpPct > 60 ? '#39ff14' : hpPct > 30 ? '#ffaa00' : '#ff3333',
-          }}
-        />
+    <div className="absolute inset-0 overflow-hidden pointer-events-none">
+      {stars.map(s => (
+        <motion.div key={s.id} className="absolute rounded-full bg-white"
+          style={{ left: `${s.x}%`, top: `${s.y}%`, width: s.size, height: s.size }}
+          animate={{ opacity: [0.1, 0.55, 0.1], scale: [1, 1.3, 1] }}
+          transition={{ duration: s.dur, delay: s.delay, repeat: Infinity, ease: "easeInOut" }} />
+      ))}
+      {/* ambient energy glow */}
+      <motion.div className="absolute rounded-full pointer-events-none"
+        style={{ width: 280, height: 280, left: "50%", top: "60%", marginLeft: -140, marginTop: -140,
+          background: "radial-gradient(circle,rgba(155,48,255,0.07) 0%,transparent 70%)" }}
+        animate={{ scale: [1, 1.12, 1], opacity: [0.5, 1, 0.5] }}
+        transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }} />
+    </div>
+  );
+}
+
+// ─── Sounds ──────────────────────────────────────────────────────────────────
+function useSounds() {
+  const ctxRef = useRef<AudioContext | null>(null);
+  const getCtx = () => {
+    if (typeof window === "undefined") return null;
+    if (!ctxRef.current) ctxRef.current = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+    if (ctxRef.current.state === "suspended") ctxRef.current.resume();
+    return ctxRef.current;
+  };
+  return useRef({
+    hit() {
+      try {
+        const c = getCtx(); if (!c) return;
+        const o = c.createOscillator(), g = c.createGain();
+        o.connect(g); g.connect(c.destination); o.type = "sawtooth";
+        o.frequency.setValueAtTime(180, c.currentTime);
+        o.frequency.exponentialRampToValueAtTime(60, c.currentTime + 0.07);
+        g.gain.setValueAtTime(0.09, c.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.09);
+        o.start(); o.stop(c.currentTime + 0.1);
+      } catch { /**/ }
+    },
+    crit() {
+      try {
+        const c = getCtx(); if (!c) return;
+        [420, 650, 960].forEach((f, i) => {
+          const o = c.createOscillator(), g = c.createGain();
+          o.connect(g); g.connect(c.destination); o.type = "sine"; o.frequency.value = f;
+          const t = c.currentTime + i * 0.055;
+          g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.09, t + 0.02);
+          g.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+          o.start(t); o.stop(t + 0.22);
+        });
+      } catch { /**/ }
+    },
+    kill() {
+      try {
+        const c = getCtx(); if (!c) return;
+        const o = c.createOscillator(), g = c.createGain();
+        o.connect(g); g.connect(c.destination); o.type = "square";
+        o.frequency.setValueAtTime(440, c.currentTime);
+        o.frequency.exponentialRampToValueAtTime(880, c.currentTime + 0.06);
+        g.gain.setValueAtTime(0.07, c.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.12);
+        o.start(); o.stop(c.currentTime + 0.15);
+      } catch { /**/ }
+    },
+    skill() {
+      try {
+        const c = getCtx(); if (!c) return;
+        [800, 1200].forEach((f, i) => {
+          const o = c.createOscillator(), g = c.createGain();
+          o.connect(g); g.connect(c.destination); o.type = "triangle"; o.frequency.value = f;
+          const t = c.currentTime + i * 0.07;
+          g.gain.setValueAtTime(0.06, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+          o.start(t); o.stop(t + 0.17);
+        });
+      } catch { /**/ }
+    },
+    levelUp() {
+      try {
+        const c = getCtx(); if (!c) return;
+        [523, 659, 784, 1047].forEach((f, i) => {
+          const o = c.createOscillator(), g = c.createGain();
+          o.connect(g); g.connect(c.destination); o.type = "sine"; o.frequency.value = f;
+          const t = c.currentTime + i * 0.09;
+          g.gain.setValueAtTime(0.08, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+          o.start(t); o.stop(t + 0.25);
+        });
+      } catch { /**/ }
+    },
+    ultimate() {
+      try {
+        const c = getCtx(); if (!c) return;
+        const o = c.createOscillator(), g = c.createGain();
+        o.connect(g); g.connect(c.destination); o.type = "sawtooth";
+        o.frequency.setValueAtTime(110, c.currentTime);
+        o.frequency.exponentialRampToValueAtTime(440, c.currentTime + 0.4);
+        g.gain.setValueAtTime(0.15, c.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.5);
+        o.start(); o.stop(c.currentTime + 0.55);
+      } catch { /**/ }
+    },
+  });
+}
+
+// ─── Monster Unit ────────────────────────────────────────────────────────────
+function MonsterUnit({ m }: { m: Mon }) {
+  const sz = m.size === "boss" ? "text-5xl" : m.size === "md" ? "text-3xl" : "text-2xl";
+  const hpPct = (m.hp / m.maxHp) * 100;
+  const col = m.phase2 ? "#ff2200" : ELEMENT_CONFIG[m.element].color;
+  return (
+    <motion.div className="absolute flex flex-col items-center pointer-events-none select-none"
+      style={{ left: `${m.posX}%`, top: m.displayY, transform: "translateX(-50%)" }}
+      animate={m.hitFlash ? { x: [-4, 4, -4, 0] } : {}}
+      transition={{ duration: 0.12, ease: "easeOut" }}>
+      {/* HP bar */}
+      <div className="w-12 h-1.5 bg-[rgba(0,0,0,0.5)] rounded-full mb-0.5 overflow-hidden border border-[rgba(255,255,255,0.08)]">
+        <motion.div className="h-full rounded-full"
+          style={{ background: hpPct > 55 ? "#39ff14" : hpPct > 28 ? "#ffaa00" : "#ff3333" }}
+          animate={{ width: `${hpPct}%` }} transition={{ duration: 0.12 }} />
       </div>
-      {/* Emoji */}
-      <div
-        className={`${sizeClass} select-none cursor-pointer`}
-        style={{
-          filter: monster.isBoss
-            ? `drop-shadow(0 0 12px ${ELEMENT_CONFIG[monster.element].color}) drop-shadow(0 0 24px ${ELEMENT_CONFIG[monster.element].color}80)`
-            : `drop-shadow(0 0 4px ${ELEMENT_CONFIG[monster.element].color}60)`,
-          animation: monster.isBoss ? 'float-hero 2s ease-in-out infinite' : undefined,
-        }}
-        onClick={onKill}
-      >
-        {monster.emoji}
-      </div>
-      {monster.isBoss && (
-        <div className="text-[9px] text-center mt-0.5" style={{ color: ELEMENT_CONFIG[monster.element].color }}>
-          {monster.name}
+      {m.isBoss && (
+        <div className="text-[8px] font-bold mb-0.5" style={{ color: col }}>
+          {m.hp.toLocaleString()}
         </div>
+      )}
+      {/* Emoji with glow + idle float + hit flash */}
+      <motion.div className={`${sz}`}
+        animate={m.hitFlash
+          ? { filter: ["brightness(1)", "brightness(3)", "brightness(1)"], scale: [1, 1.1, 1] }
+          : { y: [0, m.isBoss ? -5 : -3, 0] }
+        }
+        transition={m.hitFlash
+          ? { duration: 0.18, ease: "easeOut" }
+          : { duration: m.isBoss ? 1.8 : 2.4, repeat: Infinity, ease: "easeInOut", delay: Math.random() * 1.5 }
+        }
+        style={{
+          filter: m.isBoss
+            ? `drop-shadow(0 0 14px ${col}) drop-shadow(0 0 28px ${col}88)`
+            : `drop-shadow(0 0 5px ${col}80)`,
+          transform: m.phase2 ? "scale(1.15)" : undefined,
+        }}>
+        {m.emoji}
+      </motion.div>
+      {m.isBoss && (
+        <motion.div className="text-[9px] font-bold mt-0.5" style={{ color: col }}
+          animate={{ opacity: [0.8, 1, 0.8] }} transition={{ duration: 1.2, repeat: Infinity }}>
+          {m.phase2 ? "💀 " : ""}{m.name}
+        </motion.div>
       )}
     </motion.div>
   );
 }
 
-// Skill button
-function SkillBtn({ skill, hero, cooldown, onUse }: { skill: Skill; hero: Hero; cooldown: number; onUse: () => void }) {
-  const ready = cooldown <= 0;
-  return (
-    <motion.button
-      onClick={onUse}
-      disabled={!ready}
-      className="flex flex-col items-center gap-0.5 relative"
-      whileTap={ready ? { scale: 0.9 } : {}}
-    >
-      <div
-        className="w-11 h-11 rounded-xl flex items-center justify-center text-xl relative overflow-hidden"
+// ─── Damage float ────────────────────────────────────────────────────────────
+function FloatDmgs({ items }: { items: FloatDmg[] }) {
+  return <>
+    {items.map(d => (
+      <motion.div key={d.id} className="absolute pointer-events-none font-black z-30 select-none"
         style={{
-          background: ready
-            ? `radial-gradient(circle,${ELEMENT_CONFIG[hero.element].color}20,rgba(10,14,26,0.9))`
-            : 'rgba(10,14,26,0.6)',
-          border: `1.5px solid ${ready ? ELEMENT_CONFIG[hero.element].color + '60' : 'rgba(255,255,255,0.08)'}`,
-          boxShadow: ready ? `0 0 8px ${ELEMENT_CONFIG[hero.element].color}30` : 'none',
+          left: d.x + d.dx, top: d.y,
+          fontSize: d.clash ? 17 : d.crit ? 20 : 13,
+          color: d.clash ? "#ff8800" : d.crit ? "#ffd700" : "#ff4455",
+          textShadow: d.clash ? "0 0 12px #ff4400,0 0 24px #ff4400" : d.crit ? "0 0 10px #ffd700,0 0 20px #ffd700" : "0 0 6px #ff0033",
+          lineHeight: 1,
         }}
-      >
+        initial={{ opacity: 1, y: 0, scale: 0.5 }}
+        animate={{ opacity: 0, y: -60, scale: d.crit || d.clash ? 1.3 : 1.0 }}
+        transition={{ duration: d.crit || d.clash ? 1.2 : 0.9, ease: "easeOut" }}>
+        {d.clash ? `⚡${d.v}` : d.crit ? `💥${d.v}` : `-${d.v}`}
+      </motion.div>
+    ))}
+  </>;
+}
+
+// ─── Particle burst ──────────────────────────────────────────────────────────
+function ParticleBurst({ items }: { items: Particle[] }) {
+  return <>
+    {items.map(p => (
+      <motion.div key={p.id} className="absolute rounded-full pointer-events-none z-25"
+        style={{ left: p.x, top: p.y, width: 5, height: 5, background: p.color, boxShadow: `0 0 4px ${p.color}` }}
+        animate={{ x: p.dx * 40, y: p.dy * 40, opacity: 0, scale: 0 }}
+        transition={{ duration: 0.55, ease: "easeOut" }} />
+    ))}
+  </>;
+}
+
+// ─── Attack beam ─────────────────────────────────────────────────────────────
+function BeamSvg({ b }: { b: Beam }) {
+  const DURATION = 0.38;
+  const id = `bg-${b.id}`;
+  // bullet: animated circle traveling from (x1,y1) to (x2,y2)
+  return (
+    <>
+      {/* SVG trail line */}
+      <svg className="absolute inset-0 pointer-events-none z-10" style={{ width: "100%", height: "100%", overflow: "visible" }}>
+        <defs>
+          <linearGradient id={id} x1={b.x1} y1={b.y1} x2={b.x2} y2={b.y2} gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor={b.color} stopOpacity="0.9" />
+            <stop offset="60%" stopColor={b.color} stopOpacity="0.4" />
+            <stop offset="100%" stopColor={b.color} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <motion.line
+          x1={b.x1} y1={b.y1} x2={b.x2} y2={b.y2}
+          stroke={`url(#${id})`} strokeWidth={2.5} strokeLinecap="round"
+          initial={{ pathLength: 0, opacity: 0.9 }}
+          animate={{ pathLength: [0, 1, 1], opacity: [0.9, 0.7, 0] }}
+          transition={{ duration: DURATION, times: [0, 0.4, 1] }}
+          style={{ filter: `drop-shadow(0 0 4px ${b.color})` }}
+        />
+      </svg>
+      {/* Traveling bullet dot */}
+      <motion.div className="absolute pointer-events-none z-15 rounded-full"
+        style={{
+          left: b.x1 - 6, top: b.y1 - 6, width: 12, height: 12,
+          background: b.color,
+          boxShadow: `0 0 10px ${b.color}, 0 0 20px ${b.color}99`,
+        }}
+        animate={{ left: b.x2 - 6, top: b.y2 - 6, opacity: [0, 1, 1, 0], scale: [0.6, 1.2, 0.9, 0] }}
+        transition={{ duration: DURATION, ease: "easeIn", times: [0, 0.1, 0.75, 1] }} />
+    </>
+  );
+}
+
+function Beams({ items }: { items: Beam[] }) {
+  return <>{items.map(b => <BeamSvg key={b.id} b={b} />)}</>;
+}
+
+// ─── HP spring bar ────────────────────────────────────────────────────────────
+function HpSpring({ pct, color }: { pct: number; color: string }) {
+  const sp = useSpring(pct, { stiffness: 120, damping: 20 });
+  useEffect(() => { sp.set(pct); }, [pct, sp]);
+  const w = useTransform(sp, v => `${Math.max(0, v)}%`);
+  return <motion.div className="h-full rounded-full" style={{ width: w, background: color }} />;
+}
+
+// ─── Skill button with radial cooldown ───────────────────────────────────────
+function SkillBtn({ skill, hero, cd, onUse }: { skill: Skill; hero: Hero; cd: number; onUse: () => void }) {
+  const ready = cd <= 0;
+  const col = ELEMENT_CONFIG[hero.element].color;
+  const cdPct = ready ? 0 : Math.min(1, cd / skill.cooldown);
+  return (
+    <motion.button onClick={onUse} disabled={!ready}
+      className="flex flex-col items-center gap-0.5 flex-shrink-0"
+      whileTap={ready ? { scale: 0.82 } : {}}
+      animate={ready ? { boxShadow: [`0 0 0px ${col}00`, `0 0 12px ${col}88`, `0 0 0px ${col}00`] } : {}}
+      transition={ready ? { duration: 1.6, repeat: Infinity } : {}}>
+      <div className="w-11 h-11 rounded-xl flex items-center justify-center text-xl relative overflow-hidden"
+        style={{
+          background: ready ? `radial-gradient(circle at 50% 30%,${col}30,rgba(8,4,20,0.95))` : "rgba(8,4,20,0.7)",
+          border: `1.5px solid ${ready ? col + "70" : "rgba(255,255,255,0.07)"}`,
+          boxShadow: ready ? `0 0 10px ${col}30,inset 0 1px 0 rgba(255,255,255,0.08)` : "none",
+        }}>
         {!ready && (
-          <div
-            className="absolute inset-0 bg-black/60 flex items-center justify-center text-xs font-bold text-white"
-            style={{ borderRadius: '0.75rem' }}
-          >
-            {Math.ceil(cooldown)}
-          </div>
+          <>
+            <div className="absolute inset-0 rounded-xl" style={{
+              background: `conic-gradient(rgba(0,0,0,0.75) ${cdPct * 360}deg,transparent ${cdPct * 360}deg)`,
+            }} />
+            <span className="absolute text-[11px] font-black text-white z-10">{Math.ceil(cd)}</span>
+          </>
         )}
-        <span style={{ opacity: ready ? 1 : 0.4 }}>{skill.icon}</span>
+        <span style={{ opacity: ready ? 1 : 0.25, fontSize: 18 }}>{skill.icon}</span>
       </div>
       <span className="text-[8px] text-[#6b7a99] w-11 text-center leading-tight truncate">{skill.name}</span>
     </motion.button>
   );
 }
 
+// ─── Level-up modal ──────────────────────────────────────────────────────────
+function buildOpts(): StatOpt[] {
+  const all: StatOpt[] = [
+    { id: "atk", label: "Sức Mạnh", icon: "⚔️", desc: "+15% ATK toàn đội", apply: hs => hs.map(h => ({ ...h, atk: Math.floor(h.atk * 1.15) })) },
+    { id: "hp",  label: "Thể Lực",  icon: "❤️", desc: "+20% HP toàn đội",  apply: hs => hs.map(h => ({ ...h, maxHp: Math.floor(h.maxHp * 1.2), hp: Math.floor(h.hp * 1.2) })) },
+    { id: "def", label: "Phòng Thủ",icon: "🛡️", desc: "+20% DEF toàn đội", apply: hs => hs.map(h => ({ ...h, def: Math.floor((h.def ?? 0) * 1.2) })) },
+    { id: "heal",label: "Hồi Máu",  icon: "💚", desc: "Hồi 35% HP tất cả", apply: hs => hs.map(h => ({ ...h, hp: Math.min(h.maxHp, h.hp + Math.floor(h.maxHp * 0.35)) })) },
+    { id: "rev", label: "Triệu Hồi",icon: "✨", desc: "Hồi sinh tướng chết 50% HP", apply: hs => hs.map(h => h.hp <= 0 ? { ...h, hp: Math.floor(h.maxHp * 0.5) } : h) },
+    { id: "crit",label: "Chí Mạng", icon: "🎯", desc: "+10% tỉ lệ crit",   apply: hs => hs },
+    { id: "gold",label: "Tài Lộc",  icon: "🟡", desc: "+50% Gold từ quái", apply: hs => hs },
+    { id: "spd", label: "Tốc Chiến",icon: "⚡", desc: "Giảm cooldown -20%", apply: hs => hs },
+  ];
+  return [...all].sort(() => Math.random() - 0.5).slice(0, 3);
+}
+function LvModal({ level, opts, onPick }: { level: number; opts: StatOpt[]; onPick: (o: StatOpt) => void }) {
+  return (
+    <motion.div className="absolute inset-0 z-50 flex items-center justify-center px-4" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <div className="absolute inset-0 bg-black/85 backdrop-blur-sm" />
+      <motion.div className="relative w-full max-w-xs glass-card gold-border p-5 text-center"
+        initial={{ scale: 0.65, y: 40 }} animate={{ scale: 1, y: 0 }} transition={{ type: "spring", damping: 13, stiffness: 200 }}>
+        <motion.div className="text-5xl mb-2" animate={{ rotate: [0, -12, 12, -6, 0], scale: [1, 1.2, 1] }} transition={{ duration: 0.7 }}>⬆️</motion.div>
+        <h2 className="font-cinzel font-black text-xl mb-0.5" style={{ color: "#ffd700", textShadow: "0 0 24px #ffd700" }}>THĂNG CẤP!</h2>
+        <p className="text-[#a0a8c0] text-xs mb-4">Level <span className="text-[#ffd700] font-bold">{level}</span> — Chọn 1 phần thưởng</p>
+        <div className="space-y-2">
+          {opts.map((o, i) => (
+            <motion.button key={o.id} className="w-full glass-card p-3 flex items-center gap-3 text-left rounded-xl"
+              style={{ border: "1px solid rgba(255,215,0,0.15)" }}
+              initial={{ opacity: 0, x: -24 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.1, type: "spring", stiffness: 200 }}
+              whileHover={{ borderColor: "rgba(255,215,0,0.5)", scale: 1.02 }} whileTap={{ scale: 0.96 }}
+              onClick={() => onPick(o)}>
+              <span className="text-2xl flex-shrink-0">{o.icon}</span>
+              <div className="flex-1"><div className="font-bold text-sm text-[#f0e6c8]">{o.label}</div><div className="text-[10px] text-[#6b7a99]">{o.desc}</div></div>
+              <span className="text-[#ffd700]">▶</span>
+            </motion.button>
+          ))}
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// ─── Name input modal ─────────────────────────────────────────────────────────
+function NameModal({ current, onSave }: { current: string; onSave: (n: string) => void }) {
+  const [val, setVal] = useState(current === "Chiến Thần" ? "" : current);
+  return (
+    <motion.div className="fixed inset-0 z-[60] flex items-center justify-center px-6" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <div className="absolute inset-0 bg-black/80" onClick={() => onSave(val || current)} />
+      <motion.div className="relative glass-card gold-border p-6 w-full max-w-xs text-center"
+        initial={{ scale: 0.8 }} animate={{ scale: 1 }} transition={{ type: "spring", stiffness: 200 }}>
+        <div className="text-4xl mb-3">👑</div>
+        <h3 className="font-cinzel font-black text-lg mb-1" style={{ color: "#ffd700" }}>Nhập Danh Hiệu</h3>
+        <p className="text-[10px] text-[#6b7a99] mb-4">Tên sẽ được lưu lại vĩnh viễn</p>
+        <input className="w-full bg-[rgba(255,255,255,0.06)] border border-[rgba(255,215,0,0.3)] rounded-xl px-4 py-3 text-center text-[#f0e6c8] font-bold text-sm outline-none focus:border-[rgba(255,215,0,0.7)] mb-4"
+          placeholder="Tên của bạn..."
+          value={val} onChange={e => setVal(e.target.value)}
+          maxLength={12} autoFocus
+          onKeyDown={e => e.key === "Enter" && onSave(val || current)} />
+        <button className="w-full py-3 rounded-xl font-cinzel font-black text-sm"
+          style={{ background: "linear-gradient(135deg,#b8860b,#ffd700)", color: "#05080f" }}
+          onClick={() => onSave(val || current)}>
+          Xác Nhận ✓
+        </button>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// ─── Main Battle ─────────────────────────────────────────────────────────────
 function BattleContent() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const { state, addExp, addGold, completeStage } = useGame();
+  const params = useSearchParams();
+  const { state, addExp, addGold, completeStage, setName } = useGame();
 
-  const stageId = searchParams.get('stage') ?? 's1_1';
-  const difficulty = (searchParams.get('difficulty') ?? 'NORMAL') as Difficulty;
-  const diffMult = GAME_CONFIG.DIFFICULTY_MULTIPLIER[difficulty];
+  const stageId   = params.get("stage") ?? "s1_1";
+  const difficulty = (params.get("difficulty") ?? "NORMAL") as Difficulty;
+  const diffMult  = GAME_CONFIG.DIFFICULTY_MULTIPLIER[difficulty];
 
-  const [gameSpeed, setGameSpeed] = useState<GameSpeed>(state.player.gameSpeed);
-  const [progress, setProgress] = useState(0); // 0-100
-  const [timeElapsed, setTimeElapsed] = useState(0);
-  const [monsters, setMonsters] = useState<(Monster & { displayY: number })[]>([]);
+  // State
+  const [gs, setGs]         = useState<GameSpeed>(state.player.gameSpeed);
+  const [progress, setProg] = useState(0);
+  const [elapsed, setElapsed] = useState(0);
+  const [monsters, setMonsters] = useState<Mon[]>([]);
   const [heroes, setHeroes] = useState<Hero[]>(() =>
     state.heroes.filter(h => h.isUnlocked).slice(0, 5).map(h => ({ ...h }))
   );
-  const [cooldowns, setCooldowns] = useState<Record<string, number>>({});
-  const [bossSpawned1, setBossSpawned1] = useState(false);
-  const [bossSpawned2, setBossSpawned2] = useState(false);
-  const [result, setResult] = useState<'WIN' | 'LOSE' | null>(null);
-  const [stars, setStars] = useState(0);
-  const [showLevelUp, setShowLevelUp] = useState(false);
-  const [levelUpOptions, setLevelUpOptions] = useState<Skill[]>([]);
-  const [battleLog, setBattleLog] = useState<string[]>([]);
-  const [waveCount, setWaveCount] = useState(0);
-  const [nextWaveAt, setNextWaveAt] = useState(15); // seconds
-  const [isRunning, setIsRunning] = useState(true);
+  const [cds, setCds]       = useState<Record<string, number>>({});
+  const [boss1, setBoss1]   = useState(false);
+  const [boss2, setBoss2]   = useState(false);
+  const [result, setResult] = useState<"WIN" | "LOSE" | null>(null);
+  const [stars, setStars]   = useState(0);
+  const [log, setLog]       = useState<string[]>([]);
+  const [kills, setKills]   = useState(0);
+  const [floats, setFloats] = useState<FloatDmg[]>([]);
+  const [beams, setBeams]   = useState<Beam[]>([]);
+  const [particles, setParticles] = useState<Particle[]>([]);
+  const [goldMult, setGoldMult] = useState(1);
+  const [lvQueue, setLvQueue] = useState<number[]>([]);
+  const [showLv, setShowLv] = useState(false);
+  const [lvOpts, setLvOpts] = useState<StatOpt[]>([]);
+  const [curLv, setCurLv]   = useState(0);
+  const [combo, setCombo]   = useState(0);
+  const [ult, setUlt]       = useState(0);
+  const [ultActive, setUltActive] = useState(false);
+  const [shake, setShake]   = useState(false);
+  const [showNameModal, setShowNameModal] = useState(false);
 
-  const rafRef = useRef<number>(0);
-  const lastTickRef = useRef<number>(0);
-  const battleFieldRef = useRef<HTMLDivElement>(null);
-  const FIELD_HEIGHT = 360;
-  const HERO_Y = FIELD_HEIGHT - 60;
+  // Refs
+  const rafRef    = useRef<number>(0);
+  const lastTick  = useRef(0);
+  const waveN     = useRef(0);
+  const prevLv    = useRef(state.player.level);
+  const rewards   = useRef<{ exp: number; gold: number }[]>([]);
+  const comboTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fieldRef  = useRef<HTMLDivElement>(null);
+  const dims      = useRef({ w: 340, h: 500 });
+  const HERO_FRAC = 0.82;
+  const snd       = useSounds(); // stable ref
 
-  const addLog = (msg: string) => setBattleLog(prev => [msg, ...prev.slice(0, 4)]);
-
-  // Spawn wave
-  const spawnWave = useCallback((waveNum: number) => {
-    const templates: (keyof typeof MONSTER_TEMPLATES)[] = ['goblin', 'bat', 'skeleton', 'thunder_wolf', 'water_snake'];
-    const size = Math.floor(Math.random() * (GAME_CONFIG.WAVE_SIZE_MAX - GAME_CONFIG.WAVE_SIZE_MIN + 1)) + GAME_CONFIG.WAVE_SIZE_MIN;
-    const newMonsters = Array.from({ length: size }, (_, i) => {
-      const key = templates[Math.floor(Math.random() * templates.length)];
-      const m = spawnMonster(key, false, 0);
-      return { ...m, posX: 5 + (i / size) * 90, displayY: -50 };
+  // Track field dimensions
+  useEffect(() => {
+    if (!fieldRef.current) return;
+    const obs = new ResizeObserver(([e]) => {
+      dims.current = { w: e.contentRect.width, h: e.contentRect.height };
     });
-    setMonsters(prev => [...prev, ...newMonsters]);
-    setWaveCount(w => w + 1);
-    addLog(`🌊 Wave ${waveNum} xuất hiện! ${size} kẻ địch`);
+    obs.observe(fieldRef.current);
+    dims.current = { w: fieldRef.current.offsetWidth, h: fieldRef.current.offsetHeight };
+    return () => obs.disconnect();
   }, []);
 
-  // Spawn boss
-  const spawnBoss = useCallback((phase: 1 | 2) => {
-    const key: keyof typeof MONSTER_TEMPLATES = phase === 1 ? 'forest_king' : 'void_king';
-    const boss = spawnMonster(key, true, 0);
-    const scaled = { ...boss, hp: Math.floor(boss.hp * diffMult), maxHp: Math.floor(boss.hp * diffMult), atk: Math.floor(boss.atk * diffMult), displayY: -80 };
-    setMonsters(prev => [...prev, scaled]);
-    addLog(`👹 BOSS ${phase === 1 ? 'LẦN 1' : 'CUỐI'} xuất hiện: ${boss.name}!`);
-  }, [diffMult]);
-
-  // Main game loop
+  // Process EXP/gold rewards safely (outside setState)
   useEffect(() => {
-    if (result || showLevelUp || !isRunning) return;
+    const iv = setInterval(() => {
+      const q = rewards.current.splice(0);
+      if (!q.length) return;
+      const exp  = q.reduce((s, r) => s + r.exp, 0);
+      const gold = q.reduce((s, r) => s + r.gold, 0);
+      if (exp  > 0) addExp(exp);
+      if (gold > 0) addGold(gold);
+    }, 150);
+    return () => clearInterval(iv);
+  }, [addExp, addGold]);
 
+  const addLog = useCallback((msg: string) =>
+    setLog(p => [msg, ...p.slice(0, 5)]), []);
+
+  const triggerShake = useCallback(() => {
+    setShake(true); setTimeout(() => setShake(false), 320);
+  }, []);
+
+  const spawnParticles = useCallback((x: number, y: number, color: string) => {
+    const ps: Particle[] = Array.from({ length: 7 }, () => ({
+      id: ++_pid, x, y,
+      dx: (Math.random() - 0.5) * 2, dy: -(0.5 + Math.random()),
+      color,
+    }));
+    setParticles(p => [...p.slice(-20), ...ps]);
+    setTimeout(() => setParticles(p => p.filter(par => !ps.find(n => n.id === par.id))), 600);
+  }, []);
+
+  const fireBeam = useCallback((x1: number, y1: number, x2: number, y2: number, color: string) => {
+    const id = ++_bid;
+    setBeams(p => [...p.slice(-12), { id, x1, y1, x2, y2, color, born: Date.now() }]);
+    setTimeout(() => setBeams(p => p.filter(b => b.id !== id)), 360);
+  }, []);
+
+  const pushDmg = useCallback((x: number, y: number, v: number, crit: boolean, clash: boolean, monColor: string) => {
+    const id = ++_did;
+    setFloats(p => [...p.slice(-12), { id, x, y, dx: (Math.random() - 0.5) * 20, v, crit, clash }]);
+    setTimeout(() => setFloats(p => p.filter(d => d.id !== id)), 1400);
+    if (crit || clash) {
+      triggerShake();
+      spawnParticles(x, y, clash ? "#ff8800" : "#ffd700");
+      snd.current.crit();
+    } else {
+      snd.current.hit();
+    }
+  }, [triggerShake, spawnParticles, snd]);
+
+  const spawnWave = useCallback((n: number) => {
+    const keys: Array<keyof typeof MONSTER_TEMPLATES> = ["goblin", "bat", "skeleton", "thunder_wolf", "water_snake"];
+    const sz = Math.min(3 + Math.floor(n / 2), GAME_CONFIG.WAVE_SIZE_MAX);
+    const wave = Array.from({ length: sz }, (_, i) => {
+      const k = keys[Math.floor(Math.random() * keys.length)];
+      const m = createMonster(k, false, diffMult);
+      return { ...m, posX: 8 + (i / Math.max(sz - 1, 1)) * 84, displayY: -110 };
+    });
+    setMonsters(p => [...p.filter(m => m.alive), ...wave]);
+    addLog(`🌊 Wave ${n} — ${sz} kẻ địch!`);
+  }, [diffMult, addLog]);
+
+  const spawnBoss = useCallback((phase: 1 | 2) => {
+    const key: keyof typeof MONSTER_TEMPLATES = phase === 1 ? "forest_king" : "void_king";
+    const boss = createMonster(key, true, diffMult * 1.5);
+    boss.posX = 50; boss.displayY = -130;
+    setMonsters(p => [...p.filter(m => m.alive), boss]);
+    addLog(`👹 BOSS ${phase === 1 ? "ĐẦU" : "CUỐI"}: ${boss.name}!`);
+  }, [diffMult, addLog]);
+
+  // Initial wave
+  useEffect(() => { spawnWave(1); waveN.current = 1; }, []); // eslint-disable-line
+
+  // RAF loop (movement + cooldown tick)
+  useEffect(() => {
+    if (result || showLv) return;
     const tick = (now: number) => {
-      if (!lastTickRef.current) lastTickRef.current = now;
-      const rawDelta = (now - lastTickRef.current) / 1000;
-      lastTickRef.current = now;
-      const delta = rawDelta * gameSpeed;
-
-      setTimeElapsed(prev => {
-        const next = prev + delta;
-        const newProgress = Math.min((next / GAME_CONFIG.BATTLE_DURATION) * 100, 100);
-        setProgress(newProgress);
-
-        // Boss spawns
-        if (newProgress >= GAME_CONFIG.BOSS1_AT && !bossSpawned1) {
-          setBossSpawned1(true);
-          spawnBoss(1);
+      if (!lastTick.current) lastTick.current = now;
+      const raw = Math.min((now - lastTick.current) / 1000, 0.05);
+      lastTick.current = now;
+      const dt = raw * gs;
+      setElapsed(p => { const n = p + dt; setProg(Math.min((n / GAME_CONFIG.BATTLE_DURATION) * 100, 100)); return n; });
+      setMonsters(p => p.map(m => {
+        if (!m.alive) return m;
+        const isP2 = m.isBoss && m.hp / m.maxHp < 0.3 && !m.phase2;
+        const ny = m.displayY + (isP2 ? m.speed * 2 : m.speed) * dt * 60;
+        if (ny >= dims.current.h * HERO_FRAC) {
+          setHeroes(hp => {
+            const alive = hp.filter(h => h.hp > 0);
+            if (!alive.length) return hp;
+            if (m.phase2) return hp.map(h => h.hp > 0 ? { ...h, hp: Math.max(0, h.hp - Math.max(1, Math.floor(m.atk * 0.5))) } : h);
+            const tgt = alive[Math.floor(Math.random() * alive.length)];
+            const dmg = Math.max(1, Math.floor(m.atk) - Math.floor(((tgt as Hero & { def?: number }).def ?? 0) * 0.3));
+            return hp.map(h => h.id === tgt.id ? { ...h, hp: Math.max(0, h.hp - dmg) } : h);
+          });
+          return { ...m, phase2: isP2 || m.phase2, displayY: -110, posX: 10 + Math.random() * 80, hitFlash: false };
         }
-        if (newProgress >= GAME_CONFIG.BOSS2_AT && !bossSpawned2) {
-          setBossSpawned2(true);
-          spawnBoss(2);
-        }
-
-        return next;
-      });
-
-      // Move monsters down
-      setMonsters(prev =>
-        prev.map(m => {
-          if (!m.alive) return m;
-          const newY = m.displayY + m.speed * delta * 60;
-          // Reached heroes
-          if (newY >= HERO_Y) {
-            // Deal damage to random hero
-            setHeroes(hPrev => {
-              const alive = hPrev.filter(h => h.hp > 0);
-              if (alive.length === 0) return hPrev;
-              const target = alive[Math.floor(Math.random() * alive.length)];
-              return hPrev.map(h => h.id === target.id ? { ...h, hp: Math.max(0, h.hp - Math.floor(m.atk * diffMult)) } : h);
-            });
-            return { ...m, displayY: 0, posX: 10 + Math.random() * 80 }; // reset to top
-          }
-          return { ...m, displayY: newY };
-        })
-      );
-
-      // Cooldowns
-      setCooldowns(prev => {
-        const next: Record<string, number> = {};
-        for (const k in prev) next[k] = Math.max(0, prev[k] - delta);
-        return next;
-      });
-
+        return { ...m, phase2: isP2 || m.phase2, displayY: ny };
+      }));
+      setCds(p => { const n: Record<string, number> = {}; for (const k in p) n[k] = Math.max(0, p[k] - dt); return n; });
       rafRef.current = requestAnimationFrame(tick);
     };
-
+    lastTick.current = 0;
     rafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [result, showLevelUp, isRunning, gameSpeed, bossSpawned1, bossSpawned2, spawnBoss, diffMult]);
+  }, [result, showLv, gs]);
 
-  // Wave spawner (every 18s)
+  // Wave spawner
   useEffect(() => {
-    if (result || showLevelUp) return;
-    const interval = setInterval(() => {
-      if (progress < 100) spawnWave(waveCount + 1);
-    }, (GAME_CONFIG.WAVE_INTERVAL / gameSpeed) * 1000);
-    return () => clearInterval(interval);
-  }, [result, showLevelUp, gameSpeed, progress, waveCount, spawnWave]);
+    if (result || showLv) return;
+    const iv = setInterval(() => { waveN.current++; spawnWave(waveN.current); }, (GAME_CONFIG.WAVE_INTERVAL * 1000) / gs);
+    return () => clearInterval(iv);
+  }, [result, showLv, gs, spawnWave]);
 
-  // Auto hero attack
+  // Boss triggers
   useEffect(() => {
-    if (result || showLevelUp) return;
-    const interval = setInterval(() => {
+    if (progress >= GAME_CONFIG.BOSS1_AT && !boss1) { setBoss1(true); spawnBoss(1); }
+    if (progress >= GAME_CONFIG.BOSS2_AT && !boss2) { setBoss2(true); spawnBoss(2); }
+  }, [progress, boss1, boss2, spawnBoss]);
+
+  // Auto-attack (snd accessed via ref → NOT in deps array → interval never resets)
+  useEffect(() => {
+    if (result || showLv) return;
+    const iv = setInterval(() => {
       setMonsters(prev => {
         const alive = prev.filter(m => m.alive);
         if (!alive.length) return prev;
-        const target = alive.reduce((a, b) => a.displayY > b.displayY ? a : b);
-        const damage = heroes.reduce((sum, h) => sum + (h.hp > 0 ? h.atk : 0), 0);
-        const newHp = target.hp - Math.floor(damage * 0.1);
-        return prev.map(m => m.instanceId === target.instanceId
-          ? { ...m, hp: newHp <= 0 ? 0 : newHp, alive: newHp > 0 }
-          : m
-        );
+        const tgt = alive.reduce((a, b) => a.displayY > b.displayY ? a : b);
+        const ah = heroes.filter(h => h.hp > 0);
+        if (!ah.length) return prev;
+        const ph = ah[0];
+        const clash = elementMult(ph.element, tgt.element);
+        const isClash = clash > 1;
+        const total = ah.reduce((s, h) => s + h.atk, 0);
+        const crit = Math.random() < 0.22;
+        const comboMult = combo >= 3 ? 1.5 : 1;
+        const dmg = Math.max(1, Math.floor(total * 0.12 * (crit ? 2 : 1) * clash * comboMult));
+        const { w, h } = dims.current;
+        const heroBaseY = h * HERO_FRAC - 20;
+        const mx = (tgt.posX / 100) * w;
+        const my = Math.max(15, tgt.displayY + 20);
+        // Fire beam from each alive hero
+        ah.forEach((hero, hIdx) => {
+          const hx = (w / (ah.length + 1)) * (hIdx + 1);
+          fireBeam(hx, heroBaseY, mx, my, ELEMENT_CONFIG[hero.element].color);
+        });
+        pushDmg(mx, my, dmg, crit, isClash, ELEMENT_CONFIG[tgt.element].color);
+        if (isClash) addLog(`⚡ ELEMENT CLASH! ${ELEMENT_CONFIG[ph.element].emoji}→${ELEMENT_CONFIG[tgt.element].emoji} ×1.5!`);
+        const nhp = tgt.hp - dmg;
+        if (nhp <= 0) {
+          if (comboTimer.current) clearTimeout(comboTimer.current);
+          setCombo(c => { const nc = c + 1; comboTimer.current = setTimeout(() => setCombo(0), 2000); return nc; });
+          setKills(k => k + 1);
+          setUlt(g => Math.min(100, g + (tgt.isBoss ? 20 : 5)));
+          rewards.current.push({ exp: tgt.reward.exp, gold: Math.floor(tgt.reward.gold * goldMult) });
+          snd.current.kill();
+          spawnParticles(mx, my, ELEMENT_CONFIG[tgt.element].color);
+          if (combo >= 2) addLog(`🔥 COMBO x${combo + 1}! +${Math.floor((comboMult - 1) * 100)}% DMG`);
+          else addLog(`⚔️ ${tgt.name} tiêu diệt +${tgt.reward.exp}EXP`);
+        }
+        return prev.map(m => m.instanceId === tgt.instanceId
+          ? { ...m, hp: Math.max(0, nhp), alive: nhp > 0, hitFlash: nhp > 0 }
+          : m);
       });
-    }, (1000 / gameSpeed));
-    return () => clearInterval(interval);
-  }, [result, showLevelUp, heroes, gameSpeed]);
+      // clear hit flash
+      setTimeout(() => setMonsters(p => p.map(m => ({ ...m, hitFlash: false }))), 180);
+    }, 600 / gs);
+    return () => clearInterval(iv);
+  }, [result, showLv, heroes, gs, goldMult, combo, fireBeam, pushDmg, addLog, spawnParticles]); // snd via ref, no dep needed
 
-  // Gain gold when monster dies
-  useEffect(() => {
-    const dead = monsters.filter(m => !m.alive);
-    dead.forEach(m => addGold(m.reward.gold));
-  }, [monsters]);
+  // Ultimate
+  const fireUltimate = useCallback(() => {
+    if (ult < 100 || ultActive) return;
+    setUltActive(true); setUlt(0);
+    snd.current.ultimate();
+    setMonsters(p => p.map(m => {
+      if (m.alive) {
+        rewards.current.push({ exp: m.reward.exp, gold: Math.floor(m.reward.gold * goldMult) });
+        setKills(k => k + 1);
+      }
+      return { ...m, alive: false, hp: 0 };
+    }));
+    addLog("💫 ULTIMATE! Quét sạch kẻ địch!");
+    setTimeout(() => setUltActive(false), 2200);
+  }, [ult, ultActive, goldMult, addLog, snd]);
 
-  // Check win/lose
+  // Level-up detection
   useEffect(() => {
-    if (result) return;
-    const allHeroesDead = heroes.every(h => h.hp <= 0);
-    if (allHeroesDead) { setResult('LOSE'); setStars(0); return; }
-    const allMonstersDead = monsters.length > 0 && monsters.every(m => !m.alive) && progress >= 100;
-    if (allMonstersDead) {
-      const maxHp = heroes.reduce((s, h) => s + h.maxHp, 0);
-      const curHp = heroes.reduce((s, h) => s + h.hp, 0);
-      const hpPct = curHp / maxHp;
-      const anyDead = heroes.some(h => h.hp <= 0);
-      const newStars = anyDead ? 1 : hpPct >= 0.8 ? 3 : 2;
-      setStars(newStars);
-      setResult('WIN');
-      addExp(150 * newStars);
-      addGold(100 * newStars);
-      completeStage(stageId, newStars, timeElapsed);
+    if (state.player.level > prevLv.current) {
+      const gained = state.player.level - prevLv.current;
+      setLvQueue(q => [...q, ...Array.from({ length: gained }, (_, i) => prevLv.current + i + 1)]);
+      prevLv.current = state.player.level;
     }
-  }, [monsters, heroes, progress, result]);
+  }, [state.player.level]);
 
-  const killMonster = (instanceId: string) => {
-    setMonsters(prev => prev.map(m => m.instanceId === instanceId ? { ...m, alive: false, hp: 0 } : m));
+  useEffect(() => {
+    if (!showLv && lvQueue.length > 0) {
+      const [next, ...rest] = lvQueue;
+      setCurLv(next); setLvOpts(buildOpts()); setShowLv(true); setLvQueue(rest);
+      snd.current.levelUp();
+    }
+  }, [showLv, lvQueue, snd]);
+
+  const pickLv = (o: StatOpt) => {
+    setHeroes(p => o.apply(p));
+    if (o.id === "gold") setGoldMult(g => g + 0.5);
+    addLog(`🌟 ${o.label}: ${o.desc}`);
+    setShowLv(false);
   };
 
-  const useSkill = (heroId: string, skill: Skill) => {
+  // Skill use
+  const useSkill = useCallback((heroId: string, skill: Skill) => {
     const key = `${heroId}_${skill.id}`;
-    if ((cooldowns[key] ?? 0) > 0) return;
-    setCooldowns(prev => ({ ...prev, [key]: skill.cooldown }));
+    if ((cds[key] ?? 0) > 0) return;
+    setCds(p => ({ ...p, [key]: skill.cooldown }));
+    const hero = heroes.find(h => h.id === heroId);
     if (skill.damage) {
       setMonsters(prev => {
         const alive = prev.filter(m => m.alive);
         if (!alive.length) return prev;
-        const target = alive[0];
-        return prev.map(m => m.instanceId === target.instanceId ? { ...m, hp: Math.max(0, m.hp - skill.damage!), alive: m.hp - skill.damage! > 0 } : m);
+        const tgt = alive[0];
+        const nhp = tgt.hp - skill.damage!;
+        if (nhp <= 0) { rewards.current.push({ exp: tgt.reward.exp, gold: tgt.reward.gold }); setKills(k => k + 1); setUlt(g => Math.min(100, g + 8)); }
+        return prev.map(m => m.instanceId === tgt.instanceId ? { ...m, hp: Math.max(0, nhp), alive: nhp > 0, hitFlash: nhp > 0 } : m);
       });
     }
     if (skill.healPercent) {
-      setHeroes(prev => prev.map(h => h.id === heroId ? { ...h, hp: Math.min(h.maxHp, h.hp + Math.floor(h.maxHp * skill.healPercent! / 100)) } : h));
+      setHeroes(p => p.map(h => h.id === heroId ? { ...h, hp: Math.min(h.maxHp, h.hp + Math.floor(h.maxHp * (skill.healPercent! / 100))) } : h));
     }
-    addLog(`✨ ${heroes.find(h => h.id === heroId)?.name} dùng ${skill.name}!`);
-  };
+    snd.current.skill();
+    addLog(`✨ ${hero?.name} dùng ${skill.name}!`);
+  }, [cds, heroes, addLog, snd]);
 
-  const speedOptions: GameSpeed[] = [1, 1.5, 2];
-  const speedUnlocked = state.player.speedUnlocked;
-  const aliveMonsters = monsters.filter(m => m.alive);
-  const teamHpMax = heroes.reduce((s, h) => s + h.maxHp, 0);
-  const teamHpCur = heroes.reduce((s, h) => s + h.hp, 0);
-  const teamHpPct = teamHpMax > 0 ? (teamHpCur / teamHpMax) * 100 : 0;
+  // Win/Lose check
+  useEffect(() => {
+    if (result || showLv) return;
+    if (heroes.every(h => h.hp <= 0)) { setResult("LOSE"); return; }
+    if (progress >= 100 && monsters.filter(m => m.alive).length === 0) {
+      const maxHp = heroes.reduce((s, h) => s + h.maxHp, 0);
+      const curHp = heroes.reduce((s, h) => s + h.hp, 0);
+      const hp = curHp / maxHp;
+      const anyDead = heroes.some(h => h.hp <= 0);
+      const ns = anyDead ? 1 : hp >= 0.8 ? 3 : 2;
+      setStars(ns); setResult("WIN");
+      addExp(150 * ns); addGold(100 * ns);
+      completeStage(stageId, ns, elapsed);
+    }
+  }, [monsters, heroes, progress, result, showLv]); // eslint-disable-line
+
+  const speedOpts: GameSpeed[] = [1, 1.5, 2];
+  const aliveMons = monsters.filter(m => m.alive);
+  const teamMax = heroes.reduce((s, h) => s + h.maxHp, 0);
+  const teamCur = heroes.reduce((s, h) => s + h.hp, 0);
+  const teamPct = teamMax > 0 ? (teamCur / teamMax) * 100 : 0;
+  const ultReady = ult >= 100;
 
   return (
-    <div className="min-h-screen flex flex-col select-none" style={{
-      background: 'linear-gradient(180deg,#05080f 0%,#0a0515 50%,#05080f 100%)',
-    }}>
-      {/* TOP HUD */}
-      <div className="flex items-center gap-2 px-3 pt-3 pb-2">
-        <button onClick={() => router.back()} className="text-[#6b7a99] text-xl">◀</button>
-        <div className="flex-1">
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-[10px] text-[#6b7a99] font-cinzel">TIẾN TRÌNH ẢI</span>
-            <span className="text-[10px] text-[#ffd700]">{Math.floor(progress)}%</span>
+    <motion.div
+      className="flex flex-col h-screen overflow-hidden select-none"
+      style={{ background: "linear-gradient(180deg,#020810 0%,#0a0318 40%,#07010f 100%)" }}
+      animate={shake ? { x: [-5, 5, -4, 4, -2, 0] } : {}}
+      transition={shake ? { duration: 0.28, ease: "easeOut" } : {}}>
+
+      {/* ── TOP HUD ── */}
+      <div className="flex items-center gap-2 px-3 pt-3 pb-1.5 flex-shrink-0">
+        <button onClick={() => router.back()} className="text-[#6b7a99] text-xl w-6 flex-shrink-0">◀</button>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between mb-0.5">
+            <div className="flex items-center gap-2">
+              <span className="font-cinzel text-[10px] text-[#6b7a99]">ẢI {Math.floor(progress)}%</span>
+              <span className="text-[10px] text-[#39ff14]">💀 {kills}</span>
+              {combo >= 3 && (
+                <motion.span className="text-[10px] font-black text-[#ff6600]"
+                  animate={{ scale: [1, 1.25, 1] }} transition={{ repeat: Infinity, duration: 0.35 }}>
+                  🔥×{combo}
+                </motion.span>
+              )}
+            </div>
+            <button onClick={() => setShowNameModal(true)}
+              className="text-[10px] truncate max-w-[90px] font-bold"
+              style={{ color: "#ffd700", textShadow: "0 0 8px #ffd70060" }}>
+              👑 {state.player.name}
+            </button>
           </div>
-          <div className="h-2 bg-[rgba(255,255,255,0.06)] rounded-full overflow-hidden relative">
-            <div className="h-full rounded-full transition-all duration-300" style={{
-              width: `${progress}%`,
-              background: 'linear-gradient(90deg,#4a9eff,#bf00ff,#ffd700)',
-            }} />
-            {/* Boss markers */}
-            <div className="absolute top-0 h-full w-0.5 bg-[#ff4500]" style={{ left: '40%' }} />
-            <div className="absolute top-0 h-full w-0.5 bg-[#ff0066]" style={{ left: '80%' }} />
+          {/* Progress bar */}
+          <div className="h-1.5 bg-[rgba(255,255,255,0.05)] rounded-full overflow-hidden relative mb-0.5">
+            <motion.div className="h-full rounded-full"
+              style={{ background: "linear-gradient(90deg,#4a9eff,#bf00ff,#ffd700)" }}
+              animate={{ width: `${progress}%` }} transition={{ duration: 0.5 }} />
+            <div className="absolute top-0 h-full w-px bg-[#ff4500]/50" style={{ left: "40%" }} />
+            <div className="absolute top-0 h-full w-px bg-[#ff0066]/50" style={{ left: "80%" }} />
+          </div>
+          {/* HP bar */}
+          <div className="h-1 bg-[rgba(255,255,255,0.04)] rounded-full overflow-hidden">
+            <HpSpring pct={teamPct} color={teamPct > 55 ? "#39ff14" : teamPct > 28 ? "#ffaa00" : "#ff3333"} />
           </div>
         </div>
-        {/* Speed control */}
-        <div className="flex gap-1">
-          {speedOptions.map(s => (
-            <button
-              key={s}
-              onClick={() => (speedUnlocked || s === 1) && setGameSpeed(s)}
-              className="px-2 py-1 rounded text-[10px] font-bold transition-all"
+        {/* Speed buttons */}
+        <div className="flex gap-1 flex-shrink-0" suppressHydrationWarning>
+          {speedOpts.map(s => (
+            <button key={s} suppressHydrationWarning
+              onClick={() => (state.player.speedUnlocked || s === 1) && setGs(s)}
+              className="px-1.5 py-1 rounded text-[10px] font-bold"
               style={{
-                background: gameSpeed === s ? 'rgba(255,215,0,0.2)' : 'rgba(255,255,255,0.04)',
-                border: `1px solid ${gameSpeed === s ? 'rgba(255,215,0,0.5)' : 'rgba(255,255,255,0.08)'}`,
-                color: gameSpeed === s ? '#ffd700' : speedUnlocked || s === 1 ? '#6b7a99' : '#3a3a4a',
-              }}
-            >
-              {s}x
+                background: gs === s ? "rgba(255,215,0,0.22)" : "rgba(255,255,255,0.04)",
+                border: `1px solid ${gs === s ? "rgba(255,215,0,0.55)" : "rgba(255,255,255,0.07)"}`,
+                color: gs === s ? "#ffd700" : state.player.speedUnlocked || s === 1 ? "#6b7a99" : "#2a2a3a",
+              }}>{s}x
             </button>
           ))}
         </div>
       </div>
 
-      {/* Team HP */}
-      <div className="px-3 mb-2">
-        <div className="flex justify-between text-[10px] mb-0.5">
-          <span className="text-[#6b7a99]">HP ĐỘI</span>
-          <span style={{ color: teamHpPct > 60 ? '#39ff14' : teamHpPct > 30 ? '#ffaa00' : '#ff3333' }}>
-            {teamHpCur.toLocaleString()}/{teamHpMax.toLocaleString()}
-          </span>
-        </div>
-        <div className="h-1.5 bg-[rgba(255,255,255,0.06)] rounded-full overflow-hidden">
-          <div
-            className="hp-bar-fill h-full rounded-full"
-            style={{
-              width: `${teamHpPct}%`,
-            }}
-          />
-        </div>
-      </div>
+      {/* ── BATTLE FIELD ── */}
+      <motion.div ref={fieldRef} className="relative mx-2 rounded-2xl overflow-hidden flex-1 min-h-0"
+        style={{ background: "linear-gradient(180deg,#010710 0%,#060218 50%,#0c0420 100%)", border: "1px solid rgba(255,215,0,0.1)" }}>
 
-      {/* BATTLE FIELD */}
-      <div
-        ref={battleFieldRef}
-        className="relative mx-3 rounded-xl overflow-hidden flex-shrink-0"
-        style={{
-          height: FIELD_HEIGHT,
-          background: 'linear-gradient(180deg,#050a1a 0%,#0a0520 50%,#150520 100%)',
-          border: '1px solid rgba(255,215,0,0.1)',
-        }}
-      >
-        {/* Grid lines */}
-        <div className="absolute inset-0 opacity-5" style={{
-          backgroundImage: 'linear-gradient(rgba(255,215,0,0.3) 1px,transparent 1px),linear-gradient(90deg,rgba(255,215,0,0.3) 1px,transparent 1px)',
-          backgroundSize: '40px 40px',
-        }} />
+        <StarField />
+
+        {/* Ultimate flash overlay */}
+        <AnimatePresence>
+          {ultActive && (
+            <motion.div className="absolute inset-0 z-40 pointer-events-none"
+              initial={{ opacity: 0 }} animate={{ opacity: [0, 0.85, 0.5, 0.9, 0] }} exit={{ opacity: 0 }}
+              transition={{ duration: 1.8 }}
+              style={{ background: "radial-gradient(ellipse at center,#ffd700cc,#bf00ffaa,transparent)" }} />
+          )}
+        </AnimatePresence>
 
         {/* Battle log */}
-        <div className="absolute top-2 left-2 right-2 z-10 pointer-events-none">
-          {battleLog.slice(0, 2).map((log, i) => (
-            <motion.div
-              key={`${log}-${i}`}
-              className="text-[10px] text-[#ffd700]/70 leading-tight"
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1 - i * 0.4, x: 0 }}
-            >
-              {log}
-            </motion.div>
-          ))}
+        <div className="absolute top-2 left-2 right-2 z-20 pointer-events-none">
+          <AnimatePresence>
+            {log.slice(0, 3).map((l, i) => (
+              <motion.div key={`${l}_${i}`} className="text-[10px] leading-tight"
+                initial={{ opacity: 0, x: -10 }} animate={{ opacity: 0.9 - i * 0.28 }} exit={{ opacity: 0 }}
+                style={{ color: "#ffd700" }}>
+                {l}
+              </motion.div>
+            ))}
+          </AnimatePresence>
         </div>
 
         {/* Monsters */}
-        <AnimatePresence>
-          {aliveMonsters.map(m => (
-            <MonsterUnit key={m.instanceId} monster={m} onKill={() => killMonster(m.instanceId)} />
-          ))}
-        </AnimatePresence>
+        {aliveMons.map(m => <MonsterUnit key={m.instanceId} m={m} />)}
 
-        {/* Heroes row */}
-        <div className="absolute bottom-2 left-0 right-0 flex justify-center gap-1 px-2">
-          {heroes.map((hero, i) => {
-            const hpPct = (hero.hp / hero.maxHp) * 100;
-            const isDead = hero.hp <= 0;
+        {/* Beams */}
+        <Beams items={beams} />
+
+        {/* Damage floats */}
+        <FloatDmgs items={floats} />
+
+        {/* Particles */}
+        <ParticleBurst items={particles} />
+
+        {/* Heroes row at bottom of field */}
+        <div className="absolute left-0 right-0 flex justify-center gap-2 px-3 pointer-events-none"
+          style={{ bottom: 10 }}>
+          {heroes.map((h, i) => {
+            const hp = (h.hp / h.maxHp) * 100;
+            const dead = h.hp <= 0;
+            const col = ELEMENT_CONFIG[h.element].color;
             return (
-              <motion.div
-                key={hero.id}
-                className="flex flex-col items-center gap-0.5"
-                animate={!isDead ? { y: [0, -3, 0] } : {}}
-                transition={{ duration: 2, repeat: Infinity, delay: i * 0.3 }}
-              >
-                <div
-                  className="w-10 h-10 rounded-lg flex items-center justify-center text-xl"
+              <motion.div key={h.id} className="flex flex-col items-center gap-0.5"
+                animate={!dead ? { y: [0, -5, 0] } : { opacity: 0.2 }}
+                transition={!dead ? { duration: 2 + i * 0.3, repeat: Infinity, delay: i * 0.35, ease: "easeInOut" } : {}}>
+                <div className="w-11 h-11 rounded-xl flex items-center justify-center text-2xl"
                   style={{
-                    background: isDead ? 'rgba(20,20,20,0.8)' : `radial-gradient(circle,${ELEMENT_CONFIG[hero.element].color}20,rgba(10,14,26,0.9))`,
-                    border: `1.5px solid ${isDead ? 'rgba(255,255,255,0.05)' : ELEMENT_CONFIG[hero.element].color + '40'}`,
-                    opacity: isDead ? 0.3 : 1,
-                    filter: isDead ? 'grayscale(1)' : `drop-shadow(0 0 6px ${ELEMENT_CONFIG[hero.element].color}60)`,
-                  }}
-                >
-                  {hero.emoji}
+                    background: dead ? "rgba(10,10,10,0.8)" : `radial-gradient(circle at 50% 30%,${col}35,rgba(6,2,16,0.95))`,
+                    border: `2px solid ${dead ? "rgba(255,255,255,0.04)" : col + "60"}`,
+                    boxShadow: dead ? "none" : `0 0 12px ${col}50, inset 0 1px 0 rgba(255,255,255,0.08)`,
+                    filter: dead ? "grayscale(1)" : undefined,
+                  }}>
+                  {h.emoji}
                 </div>
-                <div className="w-10 h-1 bg-[rgba(255,255,255,0.08)] rounded-full overflow-hidden">
-                  <div
-                    className="h-full rounded-full transition-all duration-300"
-                    style={{
-                      width: `${hpPct}%`,
-                      background: hpPct > 60 ? '#39ff14' : hpPct > 30 ? '#ffaa00' : '#ff3333',
-                    }}
-                  />
+                <div className="w-11 h-1 bg-[rgba(255,255,255,0.06)] rounded-full overflow-hidden">
+                  <div className="h-full rounded-full transition-all duration-200"
+                    style={{ width: `${hp}%`, background: hp > 55 ? "#39ff14" : hp > 28 ? "#ffaa00" : "#ff3333" }} />
                 </div>
               </motion.div>
             );
           })}
         </div>
-      </div>
 
-      {/* SKILL BAR */}
-      <div className="mt-2 px-3">
-        <div className="flex gap-2 overflow-x-auto pb-1">
+        {/* Level-up overlay */}
+        <AnimatePresence>
+          {showLv && <LvModal level={curLv} opts={lvOpts} onPick={pickLv} />}
+        </AnimatePresence>
+      </motion.div>
+
+      {/* ── BOTTOM PANEL ── */}
+      <div className="flex-shrink-0 px-2 pt-1.5 pb-3">
+        {/* Ultimate gauge + button */}
+        <div className="flex items-center gap-2 mb-2">
+          <div className="flex-1 h-2 bg-[rgba(255,255,255,0.05)] rounded-full overflow-hidden">
+            <motion.div className="h-full rounded-full"
+              style={{ background: "linear-gradient(90deg,#9b30ff,#ff00aa,#ffd700)", boxShadow: ultReady ? "0 0 8px #ffd700" : "none" }}
+              animate={{ width: `${ult}%` }} transition={{ duration: 0.35 }} />
+          </div>
+          <motion.button onClick={fireUltimate} disabled={!ultReady}
+            className="font-cinzel font-black text-[10px] px-3 py-1.5 rounded-lg flex-shrink-0"
+            style={{
+              background: ultReady ? "linear-gradient(135deg,#9b30ff,#ff00aa,#ffd700)" : "rgba(255,255,255,0.04)",
+              border: `1px solid ${ultReady ? "rgba(255,215,0,0.7)" : "rgba(255,255,255,0.07)"}`,
+              color: ultReady ? "#fff" : "#2a2a3a",
+            }}
+            animate={ultReady ? { scale: [1, 1.04, 1], boxShadow: ["0 0 6px #ffd700", "0 0 22px #ffd700", "0 0 6px #ffd700"] } : {}}
+            transition={ultReady ? { repeat: Infinity, duration: 0.8 } : {}}
+            whileTap={ultReady ? { scale: 0.88 } : {}}>
+            💫 ULTIMATE
+          </motion.button>
+        </div>
+
+        {/* Skill bar */}
+        <div className="flex gap-2 overflow-x-auto pb-0.5 scrollbar-hide">
           {heroes.filter(h => h.hp > 0).flatMap(hero =>
             hero.skills.map(skill => (
-              <SkillBtn
-                key={`${hero.id}_${skill.id}`}
-                skill={skill}
-                hero={hero}
-                cooldown={cooldowns[`${hero.id}_${skill.id}`] ?? 0}
-                onUse={() => useSkill(hero.id, skill)}
-              />
+              <SkillBtn key={`${hero.id}_${skill.id}`} skill={skill} hero={hero}
+                cd={cds[`${hero.id}_${skill.id}`] ?? 0} onUse={() => useSkill(hero.id, skill)} />
             ))
           )}
         </div>
-      </div>
 
-      {/* Hero HP bars detail */}
-      <div className="mt-2 px-3 grid grid-cols-5 gap-1">
-        {heroes.map(hero => {
-          const hpPct = (hero.hp / hero.maxHp) * 100;
-          return (
-            <div key={hero.id} className="text-center">
-              <div className="text-[10px]" style={{ color: CLASS_CONFIG[hero.heroClass].color }}>{hero.emoji}</div>
-              <div className="h-1 bg-[rgba(255,255,255,0.05)] rounded-full overflow-hidden mt-0.5">
-                <div className="h-full rounded-full" style={{ width: `${hpPct}%`, background: hpPct > 50 ? '#39ff14' : '#ff3333' }} />
+        {/* Hero HP mini row */}
+        <div className="grid grid-cols-5 gap-1 mt-1.5">
+          {heroes.map(h => {
+            const hp = (h.hp / h.maxHp) * 100;
+            return (
+              <div key={h.id} className="text-center">
+                <div className="text-[11px]" style={{ color: CLASS_CONFIG[h.heroClass].color }}>{h.emoji}</div>
+                <div className="h-1 bg-[rgba(255,255,255,0.05)] rounded-full overflow-hidden mt-0.5">
+                  <div className="h-full rounded-full transition-all duration-200"
+                    style={{ width: `${hp}%`, background: hp > 50 ? "#39ff14" : "#ff3333" }} />
+                </div>
+                <div className="text-[8px] text-[#6b7a99] mt-px truncate">{Math.floor(hp)}%</div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
 
-      {/* RESULT OVERLAY */}
+      {/* ── WIN / LOSE ── */}
       <AnimatePresence>
         {result && (
-          <motion.div
-            className="fixed inset-0 z-50 flex items-center justify-center px-6"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-          >
-            <div className="absolute inset-0 bg-black/85" />
-            <motion.div
-              className="relative w-full glass-card gold-border p-6 text-center max-w-sm"
-              initial={{ scale: 0.7, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ type: 'spring', damping: 15 }}
-            >
-              <div className="text-6xl mb-3">{result === 'WIN' ? '🏆' : '💀'}</div>
-              <h2 className="font-cinzel font-black text-2xl mb-1" style={{ color: result === 'WIN' ? '#ffd700' : '#ff3333', textShadow: result === 'WIN' ? '0 0 20px #ffd700' : '0 0 20px #ff3333' }}>
-                {result === 'WIN' ? 'CHIẾN THẮNG!' : 'THẤT BẠI'}
+          <motion.div className="fixed inset-0 z-50 flex items-center justify-center px-6"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+            <div className="absolute inset-0 bg-black/88 backdrop-blur-sm" />
+            <motion.div className="relative w-full max-w-sm glass-card gold-border p-6 text-center"
+              initial={{ scale: 0.65, y: 30 }} animate={{ scale: 1, y: 0 }} transition={{ type: "spring", damping: 12, stiffness: 180 }}>
+              <motion.div className="text-6xl mb-3"
+                animate={{ rotate: result === "WIN" ? [0, -8, 8, -4, 0] : [0, -3, 3, 0], scale: [1, 1.15, 1] }}
+                transition={{ duration: 0.7, delay: 0.2 }}>
+                {result === "WIN" ? "🏆" : "💀"}
+              </motion.div>
+              <h2 className="font-cinzel font-black text-2xl mb-2"
+                style={{ color: result === "WIN" ? "#ffd700" : "#ff3333", textShadow: result === "WIN" ? "0 0 24px #ffd700" : "0 0 24px #ff3333" }}>
+                {result === "WIN" ? "CHIẾN THẮNG!" : "THẤT BẠI"}
               </h2>
-
-              {result === 'WIN' && (
-                <div className="flex justify-center gap-2 my-4">
-                  {[1, 2, 3].map(n => (
-                    <motion.div
-                      key={n}
-                      className="text-4xl"
-                      initial={{ scale: 0, rotate: -30 }}
-                      animate={{ scale: 1, rotate: 0 }}
-                      transition={{ delay: n * 0.2, type: 'spring', damping: 10 }}
-                    >
-                      {n <= stars ? '⭐' : '☆'}
-                    </motion.div>
-                  ))}
-                </div>
+              {result === "WIN" && (
+                <>
+                  <div className="flex justify-center gap-2 my-3">
+                    {[1, 2, 3].map(n => (
+                      <motion.div key={n} className="text-4xl"
+                        initial={{ scale: 0, rotate: -30 }} animate={{ scale: 1, rotate: 0 }}
+                        transition={{ delay: n * 0.2, type: "spring", stiffness: 200 }}>
+                        {n <= stars ? "⭐" : "☆"}
+                      </motion.div>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 mb-4 text-xs">
+                    {[["💀", "Kill", kills], ["⭐", "Sao", `${stars}/3`], ["❤️", "HP", `${Math.floor(teamPct)}%`]].map(([ic, lb, val]) => (
+                      <div key={lb as string} className="glass-card p-2">
+                        <div className="text-[#ffd700] font-bold">{ic} {lb}</div>
+                        <div className="text-white font-bold">{val}</div>
+                      </div>
+                    ))}
+                  </div>
+                </>
               )}
-
-              <div className="flex gap-3 mt-4">
-                <button
-                  onClick={() => router.push('/')}
-                  className="flex-1 py-3 rounded-lg font-cinzel font-bold text-sm"
-                  style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: '#f0e6c8' }}
-                >
+              <div className="flex gap-3">
+                <button onClick={() => router.push("/")} className="flex-1 py-3 rounded-xl font-cinzel font-bold text-sm"
+                  style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", color: "#f0e6c8" }}>
                   🏠 Về Sảnh
                 </button>
-                <button
-                  onClick={() => window.location.reload()}
-                  className="flex-1 py-3 rounded-lg font-cinzel font-bold text-sm"
-                  style={{ background: 'linear-gradient(135deg,#b8860b,#ffd700)', color: '#05080f' }}
-                >
+                <button onClick={() => window.location.reload()} className="flex-1 py-3 rounded-xl font-cinzel font-black text-sm"
+                  style={{ background: "linear-gradient(135deg,#b8860b,#ffd700)", color: "#05080f" }}>
                   ⚔️ Thử Lại
                 </button>
               </div>
@@ -540,13 +933,28 @@ function BattleContent() {
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
+
+      {/* ── NAME MODAL ── */}
+      <AnimatePresence>
+        {showNameModal && (
+          <NameModal current={state.player.name} onSave={n => { setName(n); setShowNameModal(false); }} />
+        )}
+      </AnimatePresence>
+    </motion.div>
   );
 }
 
 export default function BattlePage() {
   return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-[#ffd700]">Đang tải...</div>}>
+    <Suspense fallback={
+      <div className="h-screen flex items-center justify-center"
+        style={{ background: "#020810" }}>
+        <motion.div className="text-[#ffd700] font-cinzel font-black text-lg"
+          animate={{ opacity: [0.4, 1, 0.4] }} transition={{ repeat: Infinity, duration: 1.2 }}>
+          ⚔️ Đang tải...
+        </motion.div>
+      </div>
+    }>
       <BattleContent />
     </Suspense>
   );
