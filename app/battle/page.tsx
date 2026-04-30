@@ -520,7 +520,7 @@ function NameModal({ current, onSave }: { current: string; onSave: (n: string) =
 function BattleContent() {
   const router = useRouter();
   const params = useSearchParams();
-  const { state, addExp, addGold, completeStage, setName } = useGame();
+  const { state, addExp, addGold, completeStage, setName, tickDailyQuest } = useGame();
 
   const stageId   = params.get("stage") ?? "s1_1";
   const difficulty = (params.get("difficulty") ?? "NORMAL") as Difficulty;
@@ -554,6 +554,7 @@ function BattleContent() {
   const [ultActive, setUltActive] = useState(false);
   const [shake, setShake]   = useState(false);
   const [showNameModal, setShowNameModal] = useState(false);
+  const [autoPlay, setAutoPlay] = useState(false);
 
   // Refs
   const rafRef    = useRef<number>(0);
@@ -647,8 +648,12 @@ function BattleContent() {
     addLog(`👹 BOSS ${phase === 1 ? "ĐẦU" : "CUỐI"}: ${boss.name}!`);
   }, [diffMult, addLog]);
 
-  // Initial wave
-  useEffect(() => { spawnWave(1); waveN.current = 1; }, []); // eslint-disable-line
+  // Initial wave + tick daily quests
+  useEffect(() => {
+    spawnWave(1);
+    waveN.current = 1;
+    tickDailyQuest('battles', 1);
+  }, []); // eslint-disable-line
 
   // RAF loop (movement + cooldown tick)
   useEffect(() => {
@@ -684,10 +689,14 @@ function BattleContent() {
     return () => cancelAnimationFrame(rafRef.current);
   }, [result, showLv, gs]);
 
-  // Wave spawner
+  // Wave spawner — capped at WAVES_PER_STAGE waves before bosses take over
   useEffect(() => {
     if (result || showLv) return;
-    const iv = setInterval(() => { waveN.current++; spawnWave(waveN.current); }, (GAME_CONFIG.WAVE_INTERVAL * 1000) / gs);
+    const iv = setInterval(() => {
+      if (waveN.current >= GAME_CONFIG.WAVES_PER_STAGE) return;
+      waveN.current++;
+      spawnWave(waveN.current);
+    }, (GAME_CONFIG.WAVE_INTERVAL * 1000) / gs);
     return () => clearInterval(iv);
   }, [result, showLv, gs, spawnWave]);
 
@@ -729,7 +738,7 @@ function BattleContent() {
         if (nhp <= 0) {
           if (comboTimer.current) clearTimeout(comboTimer.current);
           setCombo(c => { const nc = c + 1; comboTimer.current = setTimeout(() => setCombo(0), 2000); return nc; });
-          setKills(k => k + 1);
+          setKills(k => { tickDailyQuest('kills', 1); return k + 1; });
           setUlt(g => Math.min(100, g + (tgt.isBoss ? 20 : 5)));
           rewards.current.push({ exp: tgt.reward.exp, gold: Math.floor(tgt.reward.gold * goldMult) });
           snd.current.kill();
@@ -786,6 +795,23 @@ function BattleContent() {
     addLog(`🌟 ${o.label}: ${o.desc}`);
     setShowLv(false);
   };
+
+  // Auto-play: auto-use available skills every 2 seconds
+  useEffect(() => {
+    if (!autoPlay || result || showLv) return;
+    const iv = setInterval(() => {
+      heroes.filter(h => h.hp > 0).forEach(hero => {
+        for (const skill of hero.skills) {
+          const key = `${hero.id}_${skill.id}`;
+          if (skill.cooldown > 0 && (cds[key] ?? 0) <= 0) {
+            useSkill(hero.id, skill);
+            break;
+          }
+        }
+      });
+    }, 2000 / gs);
+    return () => clearInterval(iv);
+  }, [autoPlay, result, showLv, heroes, cds, gs, useSkill]);
 
   // Skill use
   const useSkill = useCallback((heroId: string, skill: Skill) => {
@@ -874,7 +900,7 @@ function BattleContent() {
             <HpSpring pct={teamPct} color={teamPct > 55 ? "#39ff14" : teamPct > 28 ? "#ffaa00" : "#ff3333"} />
           </div>
         </div>
-        {/* Speed buttons */}
+        {/* Speed + Auto-play buttons */}
         <div className="flex gap-1 flex-shrink-0" suppressHydrationWarning>
           {speedOpts.map(s => (
             <button key={s} suppressHydrationWarning
@@ -887,6 +913,16 @@ function BattleContent() {
               }}>{s}x
             </button>
           ))}
+          <button
+            onClick={() => setAutoPlay(v => !v)}
+            className="px-1.5 py-1 rounded text-[10px] font-bold"
+            style={{
+              background: autoPlay ? "rgba(57,255,20,0.18)" : "rgba(255,255,255,0.04)",
+              border: `1px solid ${autoPlay ? "rgba(57,255,20,0.5)" : "rgba(255,255,255,0.07)"}`,
+              color: autoPlay ? "#39ff14" : "#6b7a99",
+            }}>
+            AUTO
+          </button>
         </div>
       </div>
 

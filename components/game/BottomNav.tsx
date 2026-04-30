@@ -1,16 +1,16 @@
 "use client";
 
-import { useRouter, usePathname } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 
 const NAV_ITEMS = [
-  { id: "campaign", label: "Chiến Dịch", emoji: "🗺️", href: "/campaign" },
-  { id: "dungeon",  label: "Hầm Ngục",   emoji: "🏰", href: "/dungeon" },
-  { id: "home",     label: "Sảnh",        emoji: "🏠", href: "/" },
-  { id: "heroes",   label: "Tướng",       emoji: "👑", href: "/heroes" },
-  { id: "inventory",label: "Hành Trang",  emoji: "🎒", href: "/inventory" },
-  { id: "world-tree",label: "Cây TG",     emoji: "🌳", href: "/world-tree" },
-  { id: "guild",    label: "Guild",        emoji: "⚜️", href: "/guild" },
+  { id: "campaign",    label: "Chiến Dịch", emoji: "🗺️", href: "/campaign" },
+  { id: "gacha",       label: "Triệu Hồi",  emoji: "🎲", href: "/gacha" },
+  { id: "home",        label: "Sảnh",        emoji: "🏠", href: "/" },
+  { id: "heroes",      label: "Tướng",       emoji: "👑", href: "/heroes" },
+  { id: "leaderboard", label: "Xếp Hạng",   emoji: "🏆", href: "/leaderboard" },
+  { id: "coop",        label: "Co-op",        emoji: "🤝", href: "/coop" },
+  { id: "dungeon",     label: "Hầm Ngục",   emoji: "🏰", href: "/dungeon" },
 ] as const;
 
 type NavId = (typeof NAV_ITEMS)[number]["id"];

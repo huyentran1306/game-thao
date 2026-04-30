@@ -1,9 +1,21 @@
 export type ElementType = 'WIND' | 'WATER' | 'EARTH' | 'THUNDER' | 'VOID';
 export type HeroClass = 'TANK' | 'HEALER' | 'RANGER' | 'MAGE' | 'ASSASSIN';
-export type HeroRarity = 'NORMAL' | 'UPGRADED' | 'S';
+export type HeroRarity = 'DONG' | 'BAC' | 'VANG' | 'KIM_CUONG' | 'CHI_TON';
 export type SkillType = 'ATTACK' | 'DEFENSE' | 'SUPPORT';
 export type Difficulty = 'EASY' | 'NORMAL' | 'ELITE';
 export type GameSpeed = 1 | 1.5 | 2;
+export type StarLevel = 1 | 2 | 3 | 4 | 5 | 6;
+export type AttackType = 'SINGLE' | 'MULTI' | 'AOE' | 'PIERCE' | 'EXPLOSIVE';
+export type SubStatKey =
+  | 'extraShots' | 'atkSpd' | 'lifesteal' | 'critRate'
+  | 'critDmg' | 'armorPen' | 'regenPerSec' | 'bossDmg';
+export type SubStatRarity = 'common' | 'rare' | 'epic';
+
+export interface SubStat {
+  key: SubStatKey;
+  value: number;
+  rarity: SubStatRarity;
+}
 
 export interface Skill {
   id: string;
@@ -24,6 +36,9 @@ export interface Hero {
   element: ElementType;
   heroClass: HeroClass;
   rarity: HeroRarity;
+  stars: StarLevel;
+  attackType: AttackType;
+  subStats: SubStat[];
   level: number;
   hp: number;
   maxHp: number;
@@ -49,14 +64,14 @@ export interface Monster {
   speed: number;
   isBoss: boolean;
   isElite: boolean;
-  spawnAt: number; // progress % when to spawn
+  spawnAt: number;
   reward: { exp: number; gold: number };
   emoji: string;
   size: 'sm' | 'md' | 'lg' | 'boss';
-  posX: number; // 0-100 % horizontal
-  posY: number; // current Y position (0 = top)
+  posX: number;
+  posY: number;
   alive: boolean;
-  phase?: number; // boss phase
+  phase?: number;
 }
 
 export interface ActiveSkill {
@@ -72,8 +87,8 @@ export interface BattleState {
   heroes: Hero[];
   monsters: Monster[];
   activeSkills: ActiveSkill[];
-  progress: number; // 0-100
-  timeElapsed: number; // seconds
+  progress: number;
+  timeElapsed: number;
   gameSpeed: GameSpeed;
   isRunning: boolean;
   isPaused: boolean;
@@ -118,7 +133,7 @@ export interface Equipment {
   slot: 'head' | 'body' | 'weapon' | 'shoes' | 'ring' | 'charm';
   rarity: 'common' | 'rare' | 'epic' | 'legendary';
   stats: Partial<{ atk: number; def: number; hp: number; spd: number; crit: number }>;
-  equippedTo?: string; // heroId
+  equippedTo?: string;
   icon: string;
 }
 
@@ -131,7 +146,7 @@ export interface WorldTreeNode {
   cost: { gold?: number; essence?: number };
   unlocked: boolean;
   tier: number;
-  x: number; y: number; // grid position
+  x: number; y: number;
 }
 
 export interface GuildData {
@@ -157,7 +172,7 @@ export interface PlayerData {
   guildId?: string;
   gameSpeed: GameSpeed;
   speedUnlocked: boolean;
-  essence: number; // tinh hoa
+  essence: number;
 }
 
 export interface DungeonFloor {
@@ -172,6 +187,46 @@ export interface DungeonFloor {
   rewards: string[];
 }
 
+export interface GachaChest {
+  id: 'BRONZE' | 'SILVER' | 'GOLD' | 'DIAMOND';
+  name: string;
+  emoji: string;
+  cost: { gold?: number; diamond?: number };
+  guaranteedRarity: HeroRarity;
+  dropRates: Record<HeroRarity, number>;
+  color: string;
+}
+
+export interface DailyQuestDef {
+  id: string;
+  desc: string;
+  target: number;
+  rewardGold: number;
+  rewardDiamond: number;
+  rewardChestType?: GachaChest['id'];
+  icon: string;
+}
+
+export interface DailyQuestState {
+  date: string;
+  progress: Record<string, number>;
+  claimed: Record<string, boolean>;
+}
+
+export interface AfkSession {
+  startedAt: number;
+  goldPerHour: number;
+  expPerHour: number;
+}
+
+export interface LeaderboardEntry {
+  rank: number;
+  name: string;
+  value: number;
+  avatarEmoji: string;
+  isPlayer?: boolean;
+}
+
 export interface GameSave {
   player: PlayerData;
   heroes: Hero[];
@@ -180,5 +235,8 @@ export interface GameSave {
   worldTree: { unlockedNodes: string[] };
   inventory: { equipment: Equipment[] };
   guild?: GuildData;
+  dailyQuests: DailyQuestState;
+  afkSession: AfkSession | null;
+  giftCodesUsed: string[];
   lastSaved: number;
 }
