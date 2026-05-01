@@ -561,6 +561,7 @@ function BattleContent() {
   const rafRef    = useRef<number>(0);
   const lastTick  = useRef(0);
   const waveN     = useRef(0);
+  const aliveCountRef = useRef(0); // tracks live monster count for wave gating
   const prevLv    = useRef(state.player.level);
   const rewards   = useRef<{ exp: number; gold: number }[]>([]);
   const comboTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -644,13 +645,18 @@ function BattleContent() {
 
   const spawnWave = useCallback((n: number) => {
     const keys: Array<keyof typeof MONSTER_TEMPLATES> = ["goblin", "bat", "skeleton", "thunder_wolf", "water_snake"];
-    const sz = Math.min(3 + Math.floor(n / 2), GAME_CONFIG.WAVE_SIZE_MAX);
+    // Smaller wave sizes: wave 1 = 2, wave 5 = 3, wave 10 = 4, max 5 (was 3+n/2 up to 10)
+    const sz = Math.min(2 + Math.floor(n / 4), 5);
     const wave = Array.from({ length: sz }, (_, i) => {
       const k = keys[Math.floor(Math.random() * keys.length)];
       const m = createMonster(k, false, diffMult);
       return { ...m, posX: 8 + (i / Math.max(sz - 1, 1)) * 84, displayY: -110 };
     });
-    setMonsters(p => [...p.filter(m => m.alive), ...wave]);
+    setMonsters(p => {
+      const surviving = p.filter(m => m.alive);
+      aliveCountRef.current = surviving.length + wave.length;
+      return [...surviving, ...wave];
+    });
     addLog(`🌊 Wave ${n} — ${sz} kẻ địch!`);
   }, [diffMult, addLog]);
 
@@ -703,11 +709,12 @@ function BattleContent() {
     return () => cancelAnimationFrame(rafRef.current);
   }, [result, showLv, gs]);
 
-  // Wave spawner — capped at WAVES_PER_STAGE waves before bosses take over
+  // Wave spawner — only spawn next wave when field is mostly clear (≤ 2 alive)
   useEffect(() => {
     if (result || showLv) return;
     const iv = setInterval(() => {
       if (waveN.current >= GAME_CONFIG.WAVES_PER_STAGE) return;
+      if (aliveCountRef.current > 2) return; // wait until field is clear
       waveN.current++;
       spawnWave(waveN.current);
     }, (GAME_CONFIG.WAVE_INTERVAL * 1000) / gs);
@@ -736,7 +743,7 @@ function BattleContent() {
         const total = ah.reduce((s, h) => s + h.atk, 0);
         const crit = Math.random() < 0.22;
         const comboMult = combo >= 3 ? 1.5 : 1;
-        const dmg = Math.max(1, Math.floor(total * 0.12 * (crit ? 2 : 1) * clash * comboMult));
+        const dmg = Math.max(1, Math.floor(total * 0.18 * (crit ? 2 : 1) * clash * comboMult));
         const { w, h } = dims.current;
         const heroBaseY = h * HERO_FRAC - 20;
         const mx = (tgt.posX / 100) * w;
@@ -767,9 +774,11 @@ function BattleContent() {
             else addLog(`⚔️ ${tgt.name} tiêu diệt +${tgt.reward.exp}EXP`);
           }
         }
-        return prev.map(m => m.instanceId === tgt.instanceId
+        const updated = prev.map(m => m.instanceId === tgt.instanceId
           ? { ...m, hp: Math.max(0, nhp), alive: nhp > 0, hitFlash: nhp > 0 }
           : m);
+        aliveCountRef.current = updated.filter(m => m.alive).length;
+        return updated;
       });
       // clear hit flash
       setTimeout(() => setMonsters(p => p.map(m => ({ ...m, hitFlash: false }))), 180);
@@ -782,13 +791,16 @@ function BattleContent() {
     if (ult < 100 || ultActive) return;
     setUltActive(true); setUlt(0);
     snd.current.ultimate();
-    setMonsters(p => p.map(m => {
-      if (m.alive) {
-        rewards.current.push({ exp: m.reward.exp, gold: Math.floor(m.reward.gold * goldMult) });
-        setKills(k => k + 1);
-      }
-      return { ...m, alive: false, hp: 0 };
-    }));
+    setMonsters(p => {
+      aliveCountRef.current = 0;
+      return p.map(m => {
+        if (m.alive) {
+          rewards.current.push({ exp: m.reward.exp, gold: Math.floor(m.reward.gold * goldMult) });
+          setKills(k => k + 1);
+        }
+        return { ...m, alive: false, hp: 0 };
+      });
+    });
     addLog("💫 ULTIMATE! Quét sạch kẻ địch!");
     setTimeout(() => setUltActive(false), 2200);
   }, [ult, ultActive, goldMult, addLog, snd]);
