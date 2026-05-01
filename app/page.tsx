@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useRouter } from "next/navigation";
 import { useGame } from "@/contexts/game-context";
-import { CLASS_CONFIG, ELEMENT_CONFIG, DAILY_QUESTS, AFK_CONFIG } from "@/lib/constants";
+import { CLASS_CONFIG, ELEMENT_CONFIG, DAILY_QUESTS, AFK_CONFIG, WORLD_BOSS_SCHEDULE } from "@/lib/constants";
 import type { Difficulty } from "@/types";
 import BottomNav from "@/components/game/BottomNav";
 
@@ -272,6 +272,98 @@ function AfkPanel() {
   );
 }
 
+function WorldBossHomeCard() {
+  const [mounted, setMounted] = useState(false);
+  const [countdown, setCountdown] = useState('--:--:--');
+  const [activeBoss, setActiveBoss] = useState<typeof WORLD_BOSS_SCHEDULE[0] | null>(null);
+  const [nextBoss, setNextBoss] = useState(WORLD_BOSS_SCHEDULE[0]);
+  const [currentHour, setCurrentHour] = useState(0);
+
+  useEffect(() => {
+    setMounted(true);
+    const update = () => {
+      const now = new Date();
+      const h = now.getHours(), m = now.getMinutes(), s = now.getSeconds();
+      const totalSecs = h * 3600 + m * 60 + s;
+      setCurrentHour(h);
+      const active = WORLD_BOSS_SCHEDULE.find(b => h === b.hour && m < 60);
+      setActiveBoss(active ?? null);
+      const upcoming = WORLD_BOSS_SCHEDULE.find(b => b.hour * 3600 > totalSecs) ?? WORLD_BOSS_SCHEDULE[0];
+      setNextBoss(upcoming);
+      let secsLeft = upcoming.hour * 3600 - totalSecs;
+      if (secsLeft < 0) secsLeft += 86400;
+      const hh = Math.floor(secsLeft / 3600);
+      const mm = Math.floor((secsLeft % 3600) / 60);
+      const ss = secsLeft % 60;
+      setCountdown(`${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}:${String(ss).padStart(2,'0')}`);
+    };
+    update();
+    const iv = setInterval(update, 1000);
+    return () => clearInterval(iv);
+  }, []);
+
+  if (!mounted) {
+    return (
+      <div className="mx-3 mt-3 rounded-2xl overflow-hidden relative"
+        style={{ background: 'linear-gradient(135deg,rgba(155,48,255,0.1),rgba(0,80,200,0.08))', border: '1px solid rgba(155,48,255,0.25)', height: 72 }} />
+    );
+  }
+
+  if (activeBoss) {
+    return (
+      <motion.div className="mx-3 mt-3 rounded-2xl overflow-hidden relative cursor-pointer"
+        style={{ background: 'linear-gradient(135deg,rgba(220,30,0,0.25),rgba(255,80,0,0.15))', border: '1.5px solid rgba(255,60,0,0.5)' }}
+        animate={{ boxShadow: ['0 0 10px rgba(255,60,0,0.3)','0 0 25px rgba(255,60,0,0.6)','0 0 10px rgba(255,60,0,0.3)'] }}
+        transition={{ duration: 1.2, repeat: Infinity }}>
+        <div className="px-4 py-3 flex items-center gap-3">
+          <motion.span className="text-4xl" animate={{ rotate: [0,-8,8,-4,0], scale:[1,1.15,1] }} transition={{ duration: 1.2, repeat: Infinity }}>
+            {activeBoss.emoji}
+          </motion.span>
+          <div className="flex-1">
+            <div className="font-cinzel font-black text-xs text-[#ff5500] tracking-wider">🔴 BOSS THẾ GIỚI ĐANG XUẤT HIỆN</div>
+            <div className="font-cinzel font-bold text-sm text-white mt-0.5">{activeBoss.name}</div>
+            <div className="text-[10px] text-[#ffd700] mt-0.5">🏆 {activeBoss.reward}</div>
+          </div>
+          <div className="px-3 py-1.5 rounded-xl text-xs font-cinzel font-bold"
+            style={{ background: 'rgba(255,60,0,0.25)', color: '#ff8844', border: '1px solid rgba(255,60,0,0.4)' }}>
+            THAM GIA<br />NGAY!
+          </div>
+        </div>
+      </motion.div>
+    );
+  }
+
+  return (
+    <div className="mx-3 mt-3 rounded-2xl overflow-hidden relative"
+      style={{ background: 'linear-gradient(135deg,rgba(155,48,255,0.1),rgba(0,80,200,0.08))', border: '1px solid rgba(155,48,255,0.25)' }}>
+      <div className="px-4 py-2.5 flex items-center gap-3">
+        <span className="text-3xl opacity-80">{nextBoss?.emoji ?? '🐲'}</span>
+        <div className="flex-1">
+          <div className="font-cinzel text-[10px] text-[#9b30ff] font-bold tracking-wider">BOSS THẾ GIỚI TIẾP THEO</div>
+          <div className="text-xs text-[#f0e6c8] font-bold">{nextBoss?.name} <span className="text-[#6b7a99] font-normal">lúc {nextBoss?.hour}:00</span></div>
+        </div>
+        <div className="text-right">
+          <div className="text-[9px] text-[#6b7a99]">Còn lại</div>
+          <div className="font-cinzel font-black text-sm text-[#ffd700]">{countdown}</div>
+        </div>
+      </div>
+      {/* Progress bar for all 3 bosses today */}
+      <div className="px-4 pb-2.5 flex gap-2">
+        {WORLD_BOSS_SCHEDULE.map(boss => {
+          const passed = currentHour >= boss.hour;
+          return (
+            <div key={boss.hour} className="flex-1 flex flex-col items-center gap-1">
+              <span className="text-sm" style={{ opacity: passed ? 0.4 : 1 }}>{boss.emoji}</span>
+              <div className="text-[8px]" style={{ color: passed ? '#4a5568' : '#6b7a99' }}>{boss.hour}:00</div>
+              <div className="w-full h-1 rounded-full" style={{ background: passed ? '#4a5568' : 'rgba(155,48,255,0.4)', boxShadow: passed ? 'none' : '0 0 4px rgba(155,48,255,0.6)' }} />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function HubPage() {
   const router = useRouter();
   const { state } = useGame();
@@ -336,6 +428,9 @@ export default function HubPage() {
           ))}
         </div>
       </div>
+
+      {/* World Boss Event */}
+      <WorldBossHomeCard />
 
       {/* BATTLE BUTTON */}
       <div className="mx-3 mt-4">

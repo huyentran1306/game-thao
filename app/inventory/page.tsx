@@ -139,7 +139,7 @@ export default function InventoryPage() {
         </AnimatePresence>
       </div>
 
-      <BottomNav active="inventory" />
+      <BottomNav active="heroes" />
     </div>
   );
 }

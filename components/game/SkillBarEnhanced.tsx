@@ -11,9 +11,11 @@ interface SkillBarEnhancedProps {
 }
 
 const rarityConfig: Record<HeroRarity, { color: string; borderGlow: string; bg: string }> = {
-  NORMAL: { color: "#a0aec0", borderGlow: "#cbd5e0", bg: "rgba(160, 174, 192, 0.1)" },
-  UPGRADED: { color: "#00bfff", borderGlow: "#0088ff", bg: "rgba(0, 191, 255, 0.1)" },
-  S: { color: "#ffd700", borderGlow: "#ffaa00", bg: "rgba(255, 215, 0, 0.15)" },
+  DONG:      { color: "#cd7f32", borderGlow: "#cd7f32", bg: "rgba(205,127,50,0.1)" },
+  BAC:       { color: "#c0c0c0", borderGlow: "#c0c0c0", bg: "rgba(192,192,192,0.1)" },
+  VANG:      { color: "#ffd700", borderGlow: "#ffaa00", bg: "rgba(255,215,0,0.15)" },
+  KIM_CUONG: { color: "#4fc3f7", borderGlow: "#0088ff", bg: "rgba(79,195,247,0.1)" },
+  CHI_TON:   { color: "#ff6fff", borderGlow: "#cc00cc", bg: "rgba(255,0,255,0.1)" },
 };
 
 export function SkillBarEnhanced({
@@ -22,7 +24,7 @@ export function SkillBarEnhanced({
   onSkillUse,
   disabled = false,
 }: SkillBarEnhancedProps) {
-  const getRarityConfig = (rarity: HeroRarity) => rarityConfig[rarity] || rarityConfig.NORMAL;
+  const getRarityConfig = (rarity: HeroRarity) => rarityConfig[rarity] || rarityConfig.DONG;
 
   return (
     <div className="flex gap-3 p-4 rounded-lg" style={{ background: "rgba(10, 14, 26, 0.6)", border: "1px solid rgba(155, 48, 255, 0.2)" }}>
@@ -30,7 +32,7 @@ export function SkillBarEnhanced({
         const cd = cooldowns[skill.id] || 0;
         const isOnCooldown = cd > 0;
         const cdPercent = (cd / skill.cooldown) * 100;
-        const rarity = (["NORMAL", "UPGRADED", "S"] as const)[Math.min(2, idx)] || "NORMAL";
+        const rarity = (["DONG", "VANG", "CHI_TON"] as const)[Math.min(2, idx)] || "DONG";
         const rConfig = getRarityConfig(rarity);
 
         return (

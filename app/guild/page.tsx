@@ -24,7 +24,7 @@ export default function GuildPage() {
             <span className="text-[#ff0066] font-bold text-sm">Lv hiện tại: {state.player.level}</span>
           </div>
         </motion.div>
-        <BottomNav active="guild" />
+        <BottomNav active="home" />
       </div>
     );
   }
@@ -105,7 +105,7 @@ export default function GuildPage() {
             </div>
           )}
         </div>
-        <BottomNav active="guild" />
+        <BottomNav active="home" />
       </div>
     );
   }
@@ -152,7 +152,7 @@ export default function GuildPage() {
           ))}
         </div>
       </div>
-      <BottomNav active="guild" />
+      <BottomNav active="home" />
     </div>
   );
 }

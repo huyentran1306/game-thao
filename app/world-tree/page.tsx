@@ -108,7 +108,7 @@ export default function WorldTreePage() {
         </div>
       </div>
 
-      <BottomNav active="world-tree" />
+      <BottomNav active="campaign" />
     </div>
   );
 }

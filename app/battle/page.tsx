@@ -555,6 +555,7 @@ function BattleContent() {
   const [shake, setShake]   = useState(false);
   const [showNameModal, setShowNameModal] = useState(false);
   const [autoPlay, setAutoPlay] = useState(false);
+  const [bossExplosion, setBossExplosion] = useState<{ x: number; y: number; color: string } | null>(null);
 
   // Refs
   const rafRef    = useRef<number>(0);
@@ -607,6 +608,19 @@ function BattleContent() {
     }));
     setParticles(p => [...p.slice(-20), ...ps]);
     setTimeout(() => setParticles(p => p.filter(par => !ps.find(n => n.id === par.id))), 600);
+  }, []);
+
+  const spawnBossExplosion = useCallback((x: number, y: number, color: string) => {
+    // Massive burst of particles for boss death
+    const ps: Particle[] = Array.from({ length: 28 }, () => ({
+      id: ++_pid, x, y,
+      dx: (Math.random() - 0.5) * 4, dy: -(0.3 + Math.random() * 2.5),
+      color: [color, '#ffd700', '#ff4400', '#ffffff'][Math.floor(Math.random() * 4)],
+    }));
+    setParticles(p => [...p.slice(-40), ...ps]);
+    setBossExplosion({ x, y, color });
+    setTimeout(() => setBossExplosion(null), 900);
+    setTimeout(() => setParticles(p => p.filter(par => !ps.find(n => n.id === par.id))), 1200);
   }, []);
 
   const fireBeam = useCallback((x1: number, y1: number, x2: number, y2: number, color: string) => {
@@ -741,10 +755,17 @@ function BattleContent() {
           setKills(k => { tickDailyQuest('kills', 1); return k + 1; });
           setUlt(g => Math.min(100, g + (tgt.isBoss ? 20 : 5)));
           rewards.current.push({ exp: tgt.reward.exp, gold: Math.floor(tgt.reward.gold * goldMult) });
-          snd.current.kill();
-          spawnParticles(mx, my, ELEMENT_CONFIG[tgt.element].color);
-          if (combo >= 2) addLog(`🔥 COMBO x${combo + 1}! +${Math.floor((comboMult - 1) * 100)}% DMG`);
-          else addLog(`⚔️ ${tgt.name} tiêu diệt +${tgt.reward.exp}EXP`);
+          if (tgt.isBoss) {
+            snd.current.ultimate();
+            spawnBossExplosion(mx, my, ELEMENT_CONFIG[tgt.element].color);
+            addLog(`💥 BOSS TIÊU DIỆT! ${tgt.name} +${tgt.reward.exp * 3}EXP!`);
+            triggerShake();
+          } else {
+            snd.current.kill();
+            spawnParticles(mx, my, ELEMENT_CONFIG[tgt.element].color);
+            if (combo >= 2) addLog(`🔥 COMBO x${combo + 1}! +${Math.floor((comboMult - 1) * 100)}% DMG`);
+            else addLog(`⚔️ ${tgt.name} tiêu diệt +${tgt.reward.exp}EXP`);
+          }
         }
         return prev.map(m => m.instanceId === tgt.instanceId
           ? { ...m, hp: Math.max(0, nhp), alive: nhp > 0, hitFlash: nhp > 0 }
@@ -754,7 +775,7 @@ function BattleContent() {
       setTimeout(() => setMonsters(p => p.map(m => ({ ...m, hitFlash: false }))), 180);
     }, 600 / gs);
     return () => clearInterval(iv);
-  }, [result, showLv, heroes, gs, goldMult, combo, fireBeam, pushDmg, addLog, spawnParticles]); // snd via ref, no dep needed
+  }, [result, showLv, heroes, gs, goldMult, combo, fireBeam, pushDmg, addLog, spawnParticles, spawnBossExplosion, triggerShake]); // snd via ref, no dep needed
 
   // Ultimate
   const fireUltimate = useCallback(() => {
@@ -796,23 +817,6 @@ function BattleContent() {
     setShowLv(false);
   };
 
-  // Auto-play: auto-use available skills every 2 seconds
-  useEffect(() => {
-    if (!autoPlay || result || showLv) return;
-    const iv = setInterval(() => {
-      heroes.filter(h => h.hp > 0).forEach(hero => {
-        for (const skill of hero.skills) {
-          const key = `${hero.id}_${skill.id}`;
-          if (skill.cooldown > 0 && (cds[key] ?? 0) <= 0) {
-            useSkill(hero.id, skill);
-            break;
-          }
-        }
-      });
-    }, 2000 / gs);
-    return () => clearInterval(iv);
-  }, [autoPlay, result, showLv, heroes, cds, gs, useSkill]);
-
   // Skill use
   const useSkill = useCallback((heroId: string, skill: Skill) => {
     const key = `${heroId}_${skill.id}`;
@@ -835,6 +839,23 @@ function BattleContent() {
     snd.current.skill();
     addLog(`✨ ${hero?.name} dùng ${skill.name}!`);
   }, [cds, heroes, addLog, snd]);
+
+  // Auto-play: auto-use available skills every 2 seconds
+  useEffect(() => {
+    if (!autoPlay || result || showLv) return;
+    const iv = setInterval(() => {
+      heroes.filter(h => h.hp > 0).forEach(hero => {
+        for (const skill of hero.skills) {
+          const key = `${hero.id}_${skill.id}`;
+          if (skill.cooldown > 0 && (cds[key] ?? 0) <= 0) {
+            useSkill(hero.id, skill);
+            break;
+          }
+        }
+      });
+    }, 2000 / gs);
+    return () => clearInterval(iv);
+  }, [autoPlay, result, showLv, heroes, cds, gs, useSkill]);
 
   // Win/Lose check
   useEffect(() => {
@@ -970,6 +991,23 @@ function BattleContent() {
 
         {/* Particles */}
         <ParticleBurst items={particles} />
+
+        {/* Boss death explosion ring */}
+        <AnimatePresence>
+          {bossExplosion && (
+            <motion.div className="absolute pointer-events-none z-35 rounded-full"
+              style={{
+                left: bossExplosion.x - 80, top: bossExplosion.y - 80,
+                width: 160, height: 160,
+                background: `radial-gradient(circle, ${bossExplosion.color}cc 0%, ${bossExplosion.color}66 30%, transparent 70%)`,
+              }}
+              initial={{ scale: 0.2, opacity: 1 }}
+              animate={{ scale: 3.5, opacity: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.85, ease: 'easeOut' }}
+            />
+          )}
+        </AnimatePresence>
 
         {/* Heroes row at bottom of field — TFT puck style */}
         <div className="absolute left-0 right-0 flex justify-center gap-3 px-3 pointer-events-none"

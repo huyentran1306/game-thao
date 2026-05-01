@@ -5,12 +5,113 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useRouter } from "next/navigation";
 import { useGame } from "@/contexts/game-context";
 import { RARITY_CONFIG, ELEMENT_CONFIG, CLASS_CONFIG, ATTACK_TYPE_CONFIG, SUB_STAT_POOL, SUB_STAT_RARITY_COLOR, STAR_UPGRADE_COST } from "@/lib/constants";
-import type { Hero, HeroRarity, StarLevel } from "@/types";
+import type { Hero, HeroRarity, HeroClass, StarLevel } from "@/types";
 import BottomNav from "@/components/game/BottomNav";
 
 const RARITY_TABS: { key: HeroRarity; }[] = [
   { key: 'DONG' }, { key: 'BAC' }, { key: 'VANG' }, { key: 'KIM_CUONG' }, { key: 'CHI_TON' },
 ];
+
+// ─── Class System View ────────────────────────────────────────────────────────
+function ClassSystemView({ heroes, onSelect }: { heroes: Hero[]; onSelect: (h: Hero) => void }) {
+  const classes = Object.keys(CLASS_CONFIG) as HeroClass[];
+  return (
+    <div className="space-y-4 px-3">
+      {classes.map(cls => {
+        const conf = CLASS_CONFIG[cls];
+        const group = heroes.filter(h => h.heroClass === cls);
+        return (
+          <div key={cls} className="glass-card p-3 relative overflow-hidden"
+            style={{ border: `1.5px solid ${conf.color}20` }}>
+            <div className="absolute inset-0 opacity-[0.03]"
+              style={{ background: `radial-gradient(circle at top left, ${conf.color}, transparent 60%)` }} />
+            {/* Class header */}
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-9 h-9 rounded-xl flex items-center justify-center text-xl"
+                style={{ background: conf.color + '20', border: `1.5px solid ${conf.color}40` }}>
+                {conf.emoji}
+              </div>
+              <div>
+                <div className="font-cinzel font-black text-sm" style={{ color: conf.color }}>{conf.label}</div>
+                <div className="text-[10px] text-[#6b7a99]">{conf.description}</div>
+              </div>
+              <div className="ml-auto text-[10px] text-[#6b7a99]">
+                {group.filter(h => h.isUnlocked).length}/{group.length}
+              </div>
+            </div>
+            {/* Heroes in this class */}
+            <div className="space-y-2">
+              {group.map(hero => {
+                const rc = RARITY_CONFIG[hero.rarity];
+                const el = ELEMENT_CONFIG[hero.element];
+                const atk = ATTACK_TYPE_CONFIG[hero.attackType];
+                return (
+                  <motion.div key={hero.id} whileTap={{ scale: 0.97 }}
+                    onClick={() => onSelect(hero)}
+                    className="flex items-center gap-3 p-2.5 rounded-xl cursor-pointer"
+                    style={{
+                      background: hero.isUnlocked ? rc.color + '08' : 'rgba(255,255,255,0.02)',
+                      border: `1px solid ${hero.isUnlocked ? rc.color + '30' : 'rgba(255,255,255,0.06)'}`,
+                      opacity: hero.isUnlocked ? 1 : 0.55,
+                    }}>
+                    {/* Avatar */}
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center text-2xl flex-shrink-0"
+                      style={{
+                        background: hero.isUnlocked ? `radial-gradient(circle, ${el.color}20, rgba(5,8,15,0.9))` : 'rgba(5,8,15,0.6)',
+                        border: `1.5px solid ${hero.isUnlocked ? rc.color + '50' : 'rgba(255,255,255,0.06)'}`,
+                      }}>
+                      {hero.isUnlocked ? hero.emoji : '🔒'}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-cinzel font-bold text-xs mb-0.5"
+                        style={{ color: hero.isUnlocked ? rc.color : '#6b7a99' }}>
+                        {hero.name}
+                      </div>
+                      {/* Playstyle tags */}
+                      <div className="flex flex-wrap gap-1">
+                        <span className="text-[9px] px-1.5 py-0.5 rounded font-bold"
+                          style={{ color: el.color, background: el.color + '15' }}>
+                          {el.emoji} {el.label}
+                        </span>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded font-bold"
+                          style={{ color: atk.color, background: atk.color + '15' }}>
+                          {atk.emoji} {atk.label}
+                        </span>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded font-bold"
+                          style={{ color: rc.color, background: rc.color + '12' }}>
+                          {rc.emoji} {rc.label}
+                        </span>
+                      </div>
+                      {/* Skill names */}
+                      {hero.isUnlocked && (
+                        <div className="flex gap-1 mt-1 flex-wrap">
+                          {hero.skills.slice(0, 2).map(s => (
+                            <span key={s.id} className="text-[8px] text-[#6b7a99]">
+                              {s.icon} {s.name}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    {/* Power score */}
+                    {hero.isUnlocked && (
+                      <div className="text-center flex-shrink-0">
+                        <div className="text-[10px] text-[#6b7a99]">LC</div>
+                        <div className="text-xs font-black" style={{ color: rc.color }}>
+                          {Math.floor((hero.atk + hero.def + hero.maxHp / 10) * (1 + (hero.stars - 1) * 0.15)).toLocaleString()}
+                        </div>
+                      </div>
+                    )}
+                  </motion.div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function StarRow({ stars, max = 6 }: { stars: StarLevel; max?: number }) {
   return (
@@ -270,11 +371,11 @@ function HeroDetailSheet({ hero, open, onClose }: { hero: Hero | null; open: boo
 
 export default function HeroesPage() {
   const { state } = useGame();
-  const [tab, setTab] = useState<HeroRarity>('DONG');
+  const [tab, setTab] = useState<HeroRarity | 'CLASS'>('DONG');
   const [selected, setSelected] = useState<Hero | null>(null);
   const router = useRouter();
 
-  const filtered = state.heroes.filter(h => h.rarity === tab);
+  const filtered = tab !== 'CLASS' ? state.heroes.filter(h => h.rarity === tab) : [];
   const unlockedCount = state.heroes.filter(h => h.isUnlocked).length;
 
   return (
@@ -290,8 +391,25 @@ export default function HeroesPage() {
           </div>
         </div>
 
-        {/* Rarity Tabs */}
+        {/* Tabs row */}
         <div className="flex gap-1.5 overflow-x-auto pb-1">
+          {/* Class system tab */}
+          <button
+            onClick={() => setTab('CLASS')}
+            className="flex-shrink-0 flex flex-col items-center px-3 py-2 rounded-xl text-[10px] font-cinzel font-bold transition-all"
+            style={{
+              background: tab === 'CLASS' ? 'rgba(255,215,0,0.15)' : 'rgba(255,255,255,0.04)',
+              border: `1.5px solid ${tab === 'CLASS' ? 'rgba(255,215,0,0.5)' : 'rgba(255,255,255,0.08)'}`,
+              color: tab === 'CLASS' ? '#ffd700' : '#6b7a99',
+            }}
+          >
+            <span className="text-lg">🏛️</span>
+            <span>Hệ</span>
+            <span className="text-[9px] mt-0.5" style={{ color: tab === 'CLASS' ? '#ffd70099' : '#4a5568' }}>
+              {Object.keys(CLASS_CONFIG).length} hệ
+            </span>
+          </button>
+
           {RARITY_TABS.map(t => {
             const conf = RARITY_CONFIG[t.key];
             const isActive = tab === t.key;
@@ -319,21 +437,25 @@ export default function HeroesPage() {
         </div>
       </div>
 
-      <div className="px-3 space-y-2">
-        {filtered.length === 0 && (
-          <div className="text-center py-8 text-[#6b7a99] text-sm">
-            Chưa có tướng cấp {RARITY_CONFIG[tab].label}
-          </div>
-        )}
-        {filtered.map(hero => (
-          <HeroCard
-            key={hero.id}
-            hero={hero}
-            unlocked={hero.isUnlocked}
-            onPress={() => setSelected(hero)}
-          />
-        ))}
-      </div>
+      {tab === 'CLASS' ? (
+        <ClassSystemView heroes={state.heroes} onSelect={setSelected} />
+      ) : (
+        <div className="px-3 space-y-2">
+          {filtered.length === 0 && (
+            <div className="text-center py-8 text-[#6b7a99] text-sm">
+              Chưa có tướng cấp {RARITY_CONFIG[tab as HeroRarity].label}
+            </div>
+          )}
+          {filtered.map(hero => (
+            <HeroCard
+              key={hero.id}
+              hero={hero}
+              unlocked={hero.isUnlocked}
+              onPress={() => setSelected(hero)}
+            />
+          ))}
+        </div>
+      )}
 
       <BottomNav active="heroes" />
       <HeroDetailSheet

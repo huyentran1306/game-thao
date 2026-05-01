@@ -512,12 +512,12 @@ export const MONSTER_TEMPLATES = {
 // ─────────────────────────────────────────
 export const GAME_CONFIG = {
   BATTLE_DURATION: 150,   // 2.5 minutes
-  BOSS1_AT: 50,
-  BOSS2_AT: 85,
-  WAVE_INTERVAL: 7,       // seconds between waves (fast pace)
-  WAVE_SIZE_MIN: 4,
-  WAVE_SIZE_MAX: 8,
-  WAVES_PER_STAGE: 10,    // max waves before boss
+  BOSS1_AT: 45,
+  BOSS2_AT: 80,
+  WAVE_INTERVAL: 4,       // seconds between waves (fast pace)
+  WAVE_SIZE_MIN: 5,
+  WAVE_SIZE_MAX: 10,
+  WAVES_PER_STAGE: 15,    // max waves before boss
   MAX_HERO_SKILLS: 6,
   SPEED_UNLOCK_LEVEL: 10,
   GUILD_UNLOCK_LEVEL: 15,
